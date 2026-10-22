@@ -1,0 +1,26 @@
+{
+  "name": "snap-vocab",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "截图背单词：粘贴英文截图 → 本地 OCR → 点选单词自动整理词性与中文释义 → 一键生成不背单词自制词书 txt",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "dict:build": "node scripts/build-dict.ts",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "e2e": "node tools/e2e.mts",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tesseract.js-data/eng": "^1.0.0",
+    "ecdict": "^0.0.4",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="截图背单词：从英文截图里选择生词，自动整理音标、词性和中文释义，再导出到不背单词。"
+    />
+    <title>截图背单词 · Snap Vocab</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17213b;
+        --muted: #667085;
+        --line: #dde4f0;
+        --paper: #ffffff;
+        --canvas: #f4f7fc;
+        --brand: #3157d5;
+        --brand-soft: #e9efff;
+        --green: #16856a;
+        --shadow: 0 24px 70px rgba(28, 49, 99, 0.13);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 8% 2%, rgba(49, 87, 213, 0.09), transparent 28rem),
+          radial-gradient(circle at 92% 0%, rgba(22, 133, 106, 0.08), transparent 25rem),
+          var(--canvas);
+        font-family:
+          "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+        line-height: 1.65;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .nav {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+        padding: 24px 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        font-weight: 750;
+        letter-spacing: -0.02em;
+        text-decoration: none;
+      }
+
+      .brand-mark {
+        width: 38px;
+        height: 38px;
+        display: grid;
+        place-items: center;
+        border-radius: 12px;
+        color: #fff;
+        background: var(--brand);
+        box-shadow: 0 8px 20px rgba(49, 87, 213, 0.25);
+      }
+
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .nav-links a,
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        padding: 9px 17px;
+        border: 1px solid transparent;
+        border-radius: 12px;
+        font-weight: 650;
+        text-decoration: none;
+        transition:
+          transform 160ms ease,
+          box-shadow 160ms ease,
+          background 160ms ease;
+      }
+
+      .nav-links a:hover,
+      .button:hover {
+        transform: translateY(-2px);
+      }
+
+      .nav-links .source {
+        color: var(--muted);
+      }
+
+      .button.primary {
+        color: #fff;
+        background: var(--brand);
+        box-shadow: 0 10px 24px rgba(49, 87, 213, 0.23);
+      }
+
+      .button.secondary {
+        color: var(--brand);
+        background: var(--paper);
+        border-color: var(--line);
+      }
+
+      main {
+        overflow: hidden;
+      }
+
+      .hero {
+        width: min(1180px, calc(100% - 40px));
+        margin: 48px auto 100px;
+        display: grid;
+        grid-template-columns: minmax(0, 0.8fr) minmax(560px, 1.2fr);
+        align-items: center;
+        gap: 52px;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 18px;
+        padding: 7px 12px;
+        color: var(--green);
+        background: #e9f8f3;
+        border: 1px solid #c7ecdf;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .eyebrow::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        background: var(--green);
+        border-radius: 50%;
+        box-shadow: 0 0 0 4px rgba(22, 133, 106, 0.12);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(46px, 6vw, 78px);
+        line-height: 1.05;
+        letter-spacing: -0.055em;
+      }
+
+      .lead {
+        max-width: 620px;
+        margin: 24px 0 0;
+        color: var(--muted);
+        font-size: 19px;
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 32px;
+      }
+
+      .facts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 22px;
+        margin: 28px 0 0;
+        padding: 0;
+        color: var(--muted);
+        list-style: none;
+        font-size: 14px;
+      }
+
+      .facts strong {
+        color: var(--ink);
+      }
+
+      .hero-visual {
+        position: relative;
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.74);
+        border: 1px solid rgba(255, 255, 255, 0.95);
+        border-radius: 24px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(12px);
+      }
+
+      .hero-visual::before {
+        content: "";
+        position: absolute;
+        inset: -24px -18px auto auto;
+        width: 120px;
+        height: 120px;
+        z-index: -1;
+        background: var(--brand-soft);
+        border-radius: 28px;
+        transform: rotate(8deg);
+      }
+
+      .hero-visual img {
+        display: block;
+        width: 100%;
+        border: 1px solid #e6ebf4;
+        border-radius: 15px;
+      }
+
+      .section {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto 100px;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 24px;
+      }
+
+      .section-head h2 {
+        margin: 0;
+        font-size: clamp(30px, 4vw, 46px);
+        line-height: 1.15;
+        letter-spacing: -0.035em;
+      }
+
+      .section-head p {
+        max-width: 470px;
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .card {
+        padding: 26px;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+      }
+
+      .card-number {
+        display: block;
+        margin-bottom: 24px;
+        color: var(--brand);
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+      }
+
+      .card h3 {
+        margin: 0 0 10px;
+        font-size: 19px;
+      }
+
+      .card p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .workflow {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        counter-reset: step;
+      }
+
+      .step {
+        position: relative;
+        min-height: 190px;
+        padding: 25px;
+        background: linear-gradient(145deg, #ffffff, #f9fbff);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        counter-increment: step;
+      }
+
+      .step::before {
+        content: "0" counter(step);
+        display: block;
+        margin-bottom: 34px;
+        color: var(--brand);
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+      }
+
+      .step strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 17px;
+      }
+
+      .step span {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .notice {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 28px;
+        padding: 30px 34px;
+        color: #fff;
+        background: #17213b;
+        border-radius: 22px;
+      }
+
+      .notice strong {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 20px;
+      }
+
+      .notice p {
+        margin: 0;
+        color: #c8d1e5;
+      }
+
+      .notice .button {
+        color: var(--ink);
+        background: #fff;
+      }
+
+      footer {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+        padding: 26px 0 40px;
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        color: var(--muted);
+        border-top: 1px solid var(--line);
+        font-size: 14px;
+      }
+
+      @media (max-width: 1080px) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-copy {
+          max-width: 760px;
+        }
+
+        .workflow {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 760px) {
+        .nav {
+          align-items: flex-start;
+        }
+
+        .nav-links .source {
+          display: none;
+        }
+
+        .hero {
+          margin-top: 28px;
+          gap: 34px;
+        }
+
+        .hero-visual {
+          padding: 6px;
+          border-radius: 16px;
+        }
+
+        .grid,
+        .workflow {
+          grid-template-columns: 1fr;
+        }
+
+        .section-head,
+        .notice,
+        footer {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .notice {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="nav">
+      <a class="brand" href="./" aria-label="截图背单词首页">
+        <span class="brand-mark" aria-hidden="true">S</span>
+        <span>截图背单词</span>
+      </a>
+      <nav class="nav-links" aria-label="主导航">
+        <a class="source" href="#features">功能</a>
+        <a class="source" href="#workflow">使用方法</a>
+        <a
+          class="button primary"
+          href="https://github.com/GUSIHANGLUTA/snap-vocab/releases/latest"
+        >
+          下载源码
+        </a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">本地运行 · 数据不出电脑</p>
+          <h1>把截图里的生词，变成能背的词书。</h1>
+          <p class="lead">
+            从英文截图里直接点选单词，自动整理音标、词性、中文释义、考试标签和原形，再一键导出到不背单词。
+          </p>
+          <div class="hero-actions">
+            <a
+              class="button primary"
+              href="https://github.com/GUSIHANGLUTA/snap-vocab/releases/latest"
+            >
+              获取 v1.0.0
+            </a>
+            <a
+              class="button secondary"
+              href="https://github.com/GUSIHANGLUTA/snap-vocab#快速开始"
+            >
+              查看运行方法
+            </a>
+          </div>
+          <ul class="facts" aria-label="项目特点">
+            <li><strong>76 万词</strong> 本地词库</li>
+            <li><strong>本地 OCR</strong> 不上传截图</li>
+            <li><strong>MIT</strong> 开源许可</li>
+          </ul>
+        </div>
+        <div class="hero-visual">
+          <img
+            src="screenshots/e2e-main.png"
+            alt="截图背单词主界面：左侧为英文截图，中间为整理后的单词卡片，右侧为生词本"
+          />
+        </div>
+      </section>
+
+      <section class="section" id="features">
+        <div class="section-head">
+          <h2>从识别到背诵，一条完整的本地流程。</h2>
+          <p>
+            适合从文章、课程、试卷或网页截图中收集生词。OCR、查词和生词本都在本机完成。
+          </p>
+        </div>
+        <div class="grid">
+          <article class="card">
+            <span class="card-number">01 / OCR</span>
+            <h3>截图直接选词</h3>
+            <p>粘贴截图后按词级定位，点击图片上的单词即可加入整理列表。</p>
+          </article>
+          <article class="card">
+            <span class="card-number">02 / DICTIONARY</span>
+            <h3>释义按词性分组</h3>
+            <p>给出音标、中文释义、考试标签、COCA/BNC 词频和屈折形式还原。</p>
+          </article>
+          <article class="card">
+            <span class="card-number">03 / WORDBOOK</span>
+            <h3>生词本留在本地</h3>
+            <p>生词写入 data/words.json，可标记已背、筛选并随时导出。</p>
+          </article>
+          <article class="card">
+            <span class="card-number">04 / EXPORT</span>
+            <h3>生成自制词书</h3>
+            <p>导出纯单词 TXT、单词加释义或 CSV，走不背单词的官方导入路径。</p>
+          </article>
+          <article class="card">
+            <span class="card-number">05 / PRIVACY</span>
+            <h3>截图不上传</h3>
+            <p>服务只监听 127.0.0.1，截图交给本地识别进程，不发送到第三方。</p>
+          </article>
+          <article class="card">
+            <span class="card-number">06 / OPEN SOURCE</span>
+            <h3>源码可审查</h3>
+            <p>前后端源码、测试、OCR 流程和词典构建脚本全部开放。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="workflow">
+        <div class="section-head">
+          <h2>四步整理一批生词。</h2>
+          <p>项目需要 Node.js 22.6 或更高版本。首次启动会准备本地词库。</p>
+        </div>
+        <div class="workflow">
+          <article class="step">
+            <strong>启动本地服务</strong>
+            <span>双击启动脚本，或运行 npm.cmd start。</span>
+          </article>
+          <article class="step">
+            <strong>粘贴英文截图</strong>
+            <span>按 Ctrl + V，或者把图片拖入左侧区域。</span>
+          </article>
+          <article class="step">
+            <strong>点选需要的单词</strong>
+            <span>在图片、文本视图或输入框中选出要背的词。</span>
+          </article>
+          <article class="step">
+            <strong>导出到不背单词</strong>
+            <span>复制或下载 TXT，再上传为自制词书。</span>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="notice">
+          <div>
+            <strong>这是项目介绍页，不是纯网页版应用。</strong>
+            <p>
+              GitHub Pages 无法运行本地 OCR 和词典接口。完整功能请下载源码并在电脑上启动。
+            </p>
+          </div>
+          <a
+            class="button"
+            href="https://github.com/GUSIHANGLUTA/snap-vocab#快速开始"
+          >
+            打开项目仓库
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span>截图背单词 · Snap Vocab</span>
+      <span>MIT License · 本地优先的英语生词整理工具</span>
+    </footer>
+  </body>
+</html>

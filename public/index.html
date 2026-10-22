@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>截图背单词 · Snap Vocab</title>
+    <link rel="icon" href="/favicon.svg" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">📸</span>
+        <div>
+          <h1>截图背单词</h1>
+          <p class="sub">粘贴截图 → 点选单词 → 自动整理词性与中文 → 导出到不背单词</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="statusPill" class="pill">正在连接本机服务…</span>
+        <button id="btnPickTop" class="btn">选择图片</button>
+        <button id="btnHelp" class="btn ghost">怎么用</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <!-- 截图 -->
+      <section class="pane" id="paneShot">
+        <div class="pane-head">
+          <h2>截图</h2>
+          <div class="seg" id="viewSeg">
+            <button class="seg-btn active" data-view="image" type="button">图片</button>
+            <button class="seg-btn" data-view="text" type="button">文本</button>
+          </div>
+          <label class="zoom">缩放
+            <input id="zoom" type="range" min="100" max="260" step="10" value="100" />
+          </label>
+        </div>
+        <div class="dropzone" id="dropzone">
+          <div class="dz-empty" id="dzEmpty">
+            <div class="dz-icon">📋</div>
+            <p><b>Ctrl + V</b> 粘贴截图，或把图片拖到这里</p>
+            <p class="hint">Win + Shift + S 截图 → 回到本页 Ctrl+V</p>
+            <button id="btnPick" class="btn primary" type="button">选择图片…</button>
+          </div>
+          <div class="stage" id="stage" hidden>
+            <img id="shotImage" alt="待识别的截图" />
+            <div class="overlay" id="overlay"></div>
+          </div>
+        </div>
+        <div class="text-view" id="textView" hidden>
+          <p class="hint">当成普通文字用鼠标拖选，选中哪些词就整理哪些词。</p>
+          <div class="text-layer" id="textLayer"></div>
+        </div>
+        <div class="shot-foot">
+          <span id="ocrInfo" class="hint">等待截图…</span>
+          <span style="margin-left: auto"></span>
+          <button id="btnRetryInvert" class="btn tiny ghost" type="button" hidden>反色重识别</button>
+          <button id="btnClearShot" class="btn tiny ghost" type="button" hidden>清空截图</button>
+        </div>
+      </section>
+
+      <!-- 选中单词 -->
+      <section class="pane" id="paneWords">
+        <div class="pane-head">
+          <h2>选中单词 <span id="pickedCount" class="badge">0</span></h2>
+          <div class="pane-actions">
+            <button id="btnAddAll" class="btn tiny" type="button">全部加入生词本</button>
+            <button id="btnClearPicks" class="btn tiny ghost" type="button">清空</button>
+          </div>
+        </div>
+        <div class="manual">
+          <input id="manualInput" type="text" placeholder="也可以直接输入/粘贴单词，空格或逗号分隔" autocomplete="off" />
+          <button id="btnManual" class="btn tiny" type="button">整理</button>
+        </div>
+        <div class="cards" id="cards">
+          <div class="empty">还没有选中单词。<br />在截图上点单词，或者在「文本」里拖选。</div>
+        </div>
+      </section>
+
+      <!-- 生词本 -->
+      <section class="pane" id="paneBook">
+        <div class="pane-head">
+          <h2>生词本 <span id="bookCount" class="badge">0</span></h2>
+          <div class="pane-actions">
+            <select id="bookFilter" class="btn tiny">
+              <option value="all">全部</option>
+              <option value="new">未背</option>
+              <option value="learned">已背</option>
+            </select>
+            <button id="btnExport" class="btn tiny primary" type="button">导出到不背单词</button>
+          </div>
+        </div>
+        <div class="book-list" id="bookList">
+          <div class="empty">生词本还是空的。</div>
+        </div>
+        <div class="book-foot">
+          <span class="hint" id="bookHint">数据只存在本机 data/words.json</span>
+          <button id="btnClearBook" class="btn tiny ghost" type="button">清空生词本</button>
+        </div>
+      </section>
+    </main>
+
+    <input id="fileInput" type="file" accept="image/*" hidden />
+
+    <!-- 导出弹窗 -->
+    <dialog id="exportDialog">
+      <form method="dialog" class="dialog-head">
+        <h3>导出到不背单词</h3>
+        <span class="hint" style="margin-left: auto" id="exportCount"></span>
+        <button class="btn tiny ghost" value="close" type="submit">关闭</button>
+      </form>
+      <div class="dialog-body">
+        <div class="mode-row" id="exportModes">
+          <label><input type="radio" name="exportMode" value="plain" checked /> 纯单词（推荐，一行一个）</label>
+          <label><input type="radio" name="exportMode" value="gloss" /> 单词 + 中文释义</label>
+          <label><input type="radio" name="exportMode" value="csv" /> CSV（备份/表格）</label>
+        </div>
+        <textarea id="exportPreview" class="export-preview" readonly spellcheck="false"></textarea>
+        <ol class="steps" id="exportSteps"></ol>
+        <p class="note" id="exportNote">
+          不背单词没有公开接口，官方途径是「自制词书」上传 txt（一行一个英文单词，官网会用自己的词库重新匹配释义）。
+        </p>
+      </div>
+      <div class="dialog-foot">
+        <button id="btnCopyExport" class="btn" type="button">复制</button>
+        <button id="btnDownloadExport" class="btn" type="button">下载 .txt</button>
+        <a id="btnOpenBubei" class="btn primary" href="https://bbdc.cn/lexis_book_index" target="_blank" rel="noreferrer">打开不背单词官网</a>
+      </div>
+    </dialog>
+
+    <!-- 帮助 -->
+    <dialog id="helpDialog">
+      <form method="dialog" class="dialog-head">
+        <h3>怎么用</h3>
+        <button class="btn tiny ghost" value="close" type="submit" style="margin-left: auto">关闭</button>
+      </form>
+      <div class="dialog-body">
+        <ol class="steps">
+          <li>按 <span class="kbd">Win</span> + <span class="kbd">Shift</span> + <span class="kbd">S</span> 截图，或直接复制网页上的图片，回到本页按 <span class="kbd">Ctrl</span> + <span class="kbd">V</span>。</li>
+          <li>识别完成后，在截图上**点单词**选区；点第二下取消。也可以在「文本」标签里拖选一整句。</li>
+          <li>右侧卡片会给出音标、按词性分组的中文释义、考试标签和原形（如 screens → screen）。</li>
+          <li>点「加入生词本」，攒够一批后点「导出到不背单词」，复制或下载 txt。</li>
+          <li>浏览器打开 bbdc.cn 登录 → 左上角「自制词书」上传 txt → 手机 App 里「词书 / 换本词书 → 自制」就能背了。</li>
+        </ol>
+        <p class="note">全部识别与查词都在本机完成（OCR 用本地 tesseract，词库是本地 ECDICT 77 万词），不联网也能用。</p>
+      </div>
+    </dialog>
+
+    <div id="toast"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
