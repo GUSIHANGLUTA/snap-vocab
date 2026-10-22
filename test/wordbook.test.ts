@@ -72,6 +72,25 @@ test('持久化：换一个实例仍能读到（原子写落盘）', () => {
   }
 });
 
+test('每次保存都把上一版留成 .bak，误清空还能找回', () => {
+  const { book, dir, file } = makeBook();
+  try {
+    book.addMany([{ word: 'keep-me' }]);
+    book.addMany([{ word: 'second' }]); // 这次保存前会把上一版备份
+    const backup = JSON.parse(readFileSync(`${file}.bak`, 'utf8'));
+    assert.deepEqual(
+      backup.entries.map((entry: { word: string }) => entry.word),
+      ['keep-me'],
+    );
+    // 生吞一次“清空”，.bak 里仍然是 2 个词之前的状态
+    book.clear();
+    const afterClear = JSON.parse(readFileSync(`${file}.bak`, 'utf8'));
+    assert.equal(afterClear.entries.length, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('patch / remove / clear', () => {
   const { book, dir } = makeBook();
   try {

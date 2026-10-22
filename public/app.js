@@ -328,7 +328,7 @@ function addWords(words, { silent = false } = {}) {
     const word = clampWord(raw);
     const key = wkey(word);
     if (!key || state.selected.has(key)) continue;
-    state.selected.set(key, { word, result: null });
+    state.selected.set(key, { word, original: word, result: null });
     fresh.push(word);
   }
   if (!fresh.length) {
@@ -377,9 +377,243 @@ function clearPicks() {
   state.selected.clear();
   state.results.clear();
   state.addedKeys.clear();
+  state.pendingKeys.clear();
   renderCards();
   renderOverlay();
   syncHighlights();
+}
+
+/* ------------------------------ 改词 ------------------------------ */
+
+/**
+ * 把「选中的单词」改成别的词：拖选/点选难免选错，或者想从 screens 改成 screen、从单个词改成 take off。
+ * 改完自动按新词重新查一次释义；如果这个词已经加入生词本，生词本里的条目也一起换掉。
+ */
+/** 直接查一次词（不写进 state），用于「改词前先探一下拼写对不对」。 */
+async function probeLookup(word) {
+  const response = await api('/api/lookup', { method: 'POST', body: { words: [word] } });
+  return response.results?.[0] ?? null;
+}
+
+/**
+ * 把「选中的单词」改成别的词。
+ *
+ * 自动纠错：改完先探一次，如果词库查不到但有拼写建议（编辑距离 ≤2），
+ * 就直接换成建议的正确拼写，并在卡片上留下「已纠正 原拼写 → 正确拼写 + 撤销」。
+ */
+async function renamePick(oldKey, rawWord, options = {}) {
+  const { autoCorrect = true } = options;
+  const pick = state.selected.get(oldKey);
+  if (!pick) return;
+
+  let word = clampWord(rawWord);
+  let newKey = wkey(word);
+  if (!newKey) {
+    toast('请输入英文单词', 'error');
+    renderCards();
+    return;
+  }
+
+  let correction = null;
+  let probed = null;
+  if (autoCorrect) {
+    try {
+      probed = await probeLookup(word);
+    } catch {
+      probed = null; // 探测失败就按原样走，后面照常查
+    }
+    if (probed && !probed.found && probed.suggestion?.word) {
+      const suggested = clampWord(probed.suggestion.word);
+      if (wkey(suggested) && wkey(suggested) !== newKey) {
+        correction = { from: word, to: suggested };
+        word = suggested;
+        newKey = wkey(word);
+        probed = null; // 纠正后的词还要重新查一次
+      }
+    }
+  }
+
+  if (newKey === oldKey) {
+    // 只是大小写/标点变了（Sleep -> sleep），key 不变，重查一遍刷新释义
+    if (word !== pick.word || correction) {
+      pick.word = word;
+      if (correction) pick.correction = correction;
+      else delete pick.correction; // 不再是「纠正过的词」了，别留旧提示
+      state.results.delete(oldKey);
+      renderCards();
+      await ensureLookup([word]);
+    } else {
+      renderCards();
+    }
+    return;
+  }
+
+  if (state.selected.has(newKey)) {
+    // 目标词已经在列表里：把旧卡去掉，避免两张同词卡
+    state.selected.delete(oldKey);
+    state.results.delete(oldKey);
+    state.addedKeys.delete(oldKey);
+    state.pendingKeys.delete(oldKey);
+    renderCards();
+    renderOverlay();
+    syncHighlights();
+    toast(`「${word}」已经在列表里了`);
+    return;
+  }
+
+  const wasAdded = state.addedKeys.has(oldKey);
+  const original = pick.original ?? pick.word;
+
+  // 重建 Map，保持卡片原来的顺序（直接 delete 再 set 会把卡片挪到末尾）
+  const next = new Map();
+  for (const [key, value] of state.selected) {
+    if (key !== oldKey) {
+      next.set(key, value);
+      continue;
+    }
+    const patched = { ...value, word, original, result: null };
+    if (correction) patched.correction = correction;
+    else delete patched.correction;
+    delete patched.pending;
+    next.set(newKey, patched);
+  }
+  state.selected = next;
+  state.results.delete(oldKey);
+  state.addedKeys.delete(oldKey);
+  state.pendingKeys.delete(oldKey);
+  if (probed && wkey(probed.word) === newKey) state.results.set(newKey, probed);
+
+  renderCards();
+  renderOverlay(); // 截图上的高亮随 key 变化自然消失
+  syncHighlights();
+  await ensureLookup([word]);
+  if (correction) {
+    toast(`已自动纠正拼写：${correction.from} → ${correction.to}`, 'ok');
+  }
+
+  if (wasAdded) {
+    const existing = state.book.find((item) => wkey(item.word) === oldKey);
+    if (existing) {
+      try {
+        await api('/api/wordbook', { method: 'DELETE', body: { ids: [existing.id] } });
+        await loadBook();
+      } catch (error) {
+        toast(`生词本旧词删除失败：${error.message}`, 'error');
+      }
+    }
+    await addToBook([newKey]);
+    toast(`生词本里已把「${original}」换成「${word}」`, 'ok');
+  }
+}
+
+/** 撤销自动纠错：换回用户原来输入的拼写。 */
+function undoCorrection(key) {
+  const pick = state.selected.get(key);
+  if (!pick?.correction) return;
+  void renamePick(key, pick.correction.from, { autoCorrect: false });
+}
+
+/** 把卡片上的单词变成输入框；回车或失焦确认，Esc 取消；打字时给拼写建议。 */
+function startEditWord(key, el) {
+  const pick = state.selected.get(key);
+  if (!pick) return;
+  if (document.querySelector('#cards .card-word-input')) return; // 同时只允许编辑一张卡
+
+  const input = document.createElement('input');
+  input.className = 'card-word-input';
+  input.type = 'text';
+  input.value = pick.word;
+  input.spellcheck = false;
+  input.autocomplete = 'off';
+  input.setAttribute('aria-label', '修改单词');
+  el.replaceWith(input);
+  input.focus();
+  input.select();
+
+  // 输入时的拼写建议条：Tab 或点击采纳，回车直接提交（提交时服务端也会再纠一次）
+  const hint = document.createElement('div');
+  hint.className = 'edit-hint';
+  hint.hidden = true;
+  input.closest('.card')?.querySelector('.card-head')?.after(hint);
+
+  let suggestion = null;
+  let timer = null;
+  const renderHint = () => {
+    if (!suggestion) {
+      hint.hidden = true;
+      hint.textContent = '';
+      return;
+    }
+    hint.hidden = false;
+    hint.textContent = '拼写建议：';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn tiny';
+    btn.textContent = suggestion;
+    btn.addEventListener('mousedown', (event) => {
+      // mousedown 而不是 click：避免输入框先失焦提交掉
+      event.preventDefault();
+      settle(suggestion);
+    });
+    const tip = document.createElement('span');
+    tip.className = 'hint';
+    tip.textContent = '（Tab 采纳）';
+    hint.append(btn, tip);
+  };
+
+  const scheduleProbe = () => {
+    if (timer) clearTimeout(timer);
+    const value = input.value.trim();
+    if (!value || wkey(value) === key) {
+      suggestion = null;
+      renderHint();
+      return;
+    }
+    timer = setTimeout(async () => {
+      try {
+        const probed = await probeLookup(value);
+        suggestion = probed && !probed.found && probed.suggestion?.word ? probed.suggestion.word : null;
+      } catch {
+        suggestion = null;
+      }
+      renderHint();
+    }, 340);
+  };
+
+  let settled = false;
+  /** 结束编辑：chosen 传字符串就用它覆盖输入值（采纳建议），否则用输入框里的内容。 */
+  const settle = (chosen) => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    if (typeof chosen === 'string' && chosen) input.value = chosen;
+    void renamePick(key, input.value);
+  };
+  const cancel = () => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    renderCards();
+  };
+
+  input.addEventListener('input', scheduleProbe);
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      settle();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      cancel();
+    } else if (event.key === 'Tab' && suggestion) {
+      event.preventDefault();
+      settle(suggestion);
+    }
+  });
+  input.addEventListener('blur', () => {
+    // 点击建议按钮时是 mousedown 先触发，这里已经 settled 了
+    if (!settled) settle();
+  });
+  scheduleProbe();
 }
 
 /** 高亮联动：图上热区 + 文本层 span 一起改 class，不重绘整层。 */
@@ -422,9 +656,13 @@ function buildCard(key) {
 
   const head = document.createElement('div');
   head.className = 'card-head';
-  const wordEl = document.createElement('span');
+  const wordEl = document.createElement('button');
+  wordEl.type = 'button';
   wordEl.className = 'card-word';
+  wordEl.dataset.act = 'edit-word';
+  wordEl.title = '点一下可以改这个词，回车后重新查释义';
   wordEl.textContent = pick?.word ?? key;
+  wordEl.addEventListener('click', () => startEditWord(key, wordEl));
   head.append(wordEl);
 
   const result = state.results.get(key);
@@ -451,13 +689,41 @@ function buildCard(key) {
   speak.title = '朗读';
   speak.textContent = '🔊';
   speak.addEventListener('click', () => speakWord(pick?.word ?? key));
+  const edit = document.createElement('button');
+  edit.type = 'button';
+  edit.className = 'icon-btn';
+  edit.dataset.act = 'edit';
+  edit.title = '改词（改成原形、换拼写、或改成词组）';
+  edit.textContent = '✎';
+  edit.addEventListener('click', () => startEditWord(key, wordEl));
   const spacer = document.createElement('span');
   spacer.className = 'spacer';
-  head.append(spacer, speak);
+  head.append(spacer, edit, speak);
   card.append(head);
 
   const meta = document.createElement('div');
   meta.className = 'meta';
+  if (pick?.original && wkey(pick.original) !== key) meta.append(createChip(`改自 ${pick.original}`, 'origin'));
+  if (pick?.correction) {
+    const fix = createChip(`已纠正 ${pick.correction.from} → ${pick.correction.to}`, 'fix');
+    const undo = document.createElement('button');
+    undo.type = 'button';
+    undo.className = 'chip-btn';
+    undo.textContent = '撤销';
+    undo.title = '换回你原来输入的拼写';
+    undo.addEventListener('click', () => undoCorrection(key));
+    fix.append(undo);
+    meta.append(fix);
+  }
+  if (result && !result.found && result.suggestion?.word) {
+    const guess = document.createElement('button');
+    guess.type = 'button';
+    guess.className = 'chip guess';
+    guess.title = '按这个词重新查';
+    guess.textContent = `是否想查 ${result.suggestion.word}？`;
+    guess.addEventListener('click', () => void renamePick(key, result.suggestion.word, { autoCorrect: false }));
+    meta.append(guess);
+  }
   if (result?.lemma && result.lemma.toLowerCase() !== key) meta.append(createChip(`原型 ${result.lemma}`, 'lemma'));
   for (const tag of result?.tags ?? []) meta.append(createChip(tag, 'tag'));
   if (result?.frq) meta.append(createChip(`COCA 词频 ${result.frq}`));
@@ -542,7 +808,8 @@ function renderCards() {
   if (!state.selected.size) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.innerHTML = '还没有选中单词。<br />在截图上点单词，或者在「文本」里拖选。';
+    empty.innerHTML =
+      '还没有选中单词。<br />在截图上点单词，或者切到「文本」拖选。<br /><span class="hint">加进来之后还能点卡片上的单词改词，改完自动重新查释义。</span>';
     container.append(empty);
     $('#pickedCount').textContent = '0';
     return;

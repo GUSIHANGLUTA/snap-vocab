@@ -1,18 +1,22 @@
 /**
  * 端到端验证：无头 Chrome（CDP）打开页面 → 注入一张截图 → 真实点击图上的单词
- * → 断言出现词性/中文释义 → 文本层拖选 → 加入生词本 → 打开导出面板 → 截图。
+ * → 断言出现词性/中文释义 → 改词 → 文本层拖选 → 加入生词本 → 打开导出面板 → 截图。
  *
- * 用法：npm run e2e            （会复用已在跑的 8910 服务，或者自己拉起来）
+ * 用法：npm run e2e
  * 依赖：本机已装 Chrome；不需要 puppeteer。
+ *
+ * ⚠️ 安全性：验证会自己拉一个 **独立实例**（默认 8911 端口）并把生词本指向临时文件
+ * （SNAP_WORDS_FILE），全程不碰你在 8910 上用的真实生词本 data/words.json。
+ * 早期版本复用 8910 并清空生词本，误删过真实数据，所以这里刻意做成隔离的。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const APP_ROOT = resolve(import.meta.dirname, '..');
-const APP = process.env.SNAP_APP_URL ?? 'http://127.0.0.1:8910';
+const E2E_PORT = Number(process.env.E2E_PORT ?? 8911);
+const APP = process.env.SNAP_APP_URL ?? `http://127.0.0.1:${E2E_PORT}`;
 const CDP_PORT = Number(process.env.CDP_PORT ?? 9223);
 const CHROME_CANDIDATES = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -43,22 +47,29 @@ async function isServerUp(): Promise<boolean> {
   }
 }
 
-async function ensureServer(): Promise<void> {
+/** 独立的验证实例：临时端口 + 临时生词本，绝不碰真实数据。 */
+async function ensureServer(tempDir: string): Promise<void> {
   if (await isServerUp()) {
-    console.log(`服务已在运行：${APP}`);
+    console.log(`复用已在运行的验证实例：${APP}`);
     return;
   }
-  console.log('服务未启动，自动拉起…');
-  serverProcess = spawn(process.execPath, [join(APP_ROOT, 'src/server.ts')], {
+  const tempWords = join(tempDir, 'words.json');
+  console.log(`启动验证实例：${APP}（生词本临时文件 ${tempWords}）`);
+  serverProcess = spawn(process.execPath, [join(APP_ROOT, 'src', 'server.ts')], {
     cwd: APP_ROOT,
     stdio: 'inherit',
-    env: { ...process.env },
+    env: {
+      ...process.env,
+      PORT: String(E2E_PORT),
+      SNAP_WORDS_FILE: tempWords,
+      OPEN_BROWSER: '0',
+    },
   });
   for (let i = 0; i < 80; i += 1) {
     await sleep(500);
     if (await isServerUp()) return;
   }
-  throw new Error('服务启动超时');
+  throw new Error('验证实例启动超时');
 }
 
 class Cdp {
@@ -132,7 +143,8 @@ function launchChrome(): ChildProcess {
 async function main(): Promise<void> {
   if (!existsSync(SAMPLE)) throw new Error(`缺少测试图片：${SAMPLE}`);
   mkdirSync(SHOT_DIR, { recursive: true });
-  await ensureServer();
+  const tempDir = mkdtempSync(join(tmpdir(), 'snap-vocab-e2e-'));
+  await ensureServer(tempDir);
 
   chrome = launchChrome();
   const cdp = new Cdp(await getWsUrl());
@@ -186,10 +198,9 @@ async function main(): Promise<void> {
   const pill = await evaluate(`document.querySelector('#statusPill').textContent`);
   check('顶栏状态提示已更新', String(pill).includes('词库'), String(pill));
 
-  console.log('\n2) 清空生词本（保证可重复验证）');
-  await evaluate(`fetch('/api/wordbook', { method: 'DELETE', headers: {'content-type':'application/json'}, body: JSON.stringify({ all: true }) }).then(r => r.status)`);
+  console.log('\n2) 验证实例用的是临时生词本（不碰真实数据）');
   const emptyBook = await evaluate(`fetch('/api/wordbook').then(r => r.json()).then(d => d.count)`);
-  check('生词本已清空', emptyBook === 0, `count=${emptyBook}`);
+  check('临时生词本起始为空', emptyBook === 0, `count=${emptyBook}`);
 
   console.log('\n3) 注入截图并等 OCR');
   const base64 = readFileSync(SAMPLE).toString('base64');
@@ -233,7 +244,121 @@ async function main(): Promise<void> {
     check('选中计数已更新', (await evaluate(`document.querySelector('#pickedCount').textContent`)) === '1');
   }
 
-  console.log('\n5) 文本层拖选（第二种选词方式）');
+  console.log('\n5) 改词：点卡片上的单词改掉，重新出释义');
+  const editOpened = await evaluate(`(() => {
+    const card = [...document.querySelectorAll('#cards .card')].find(c => c.querySelector('.card-word')?.textContent === 'consolidation');
+    if (!card) return false;
+    card.querySelector('.card-word').click();
+    return Boolean(document.querySelector('#cards .card-word-input'));
+  })()`);
+  check('点单词后出现输入框', Boolean(editOpened));
+  await shot('e2e-edit.png');
+
+  const committed = await evaluate(`(() => {
+    const input = document.querySelector('#cards .card-word-input');
+    if (!input) return false;
+    input.value = 'consolidate';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    return true;
+  })()`);
+  check('回车提交改词', Boolean(committed));
+
+  const renamed = await waitFor(
+    `(() => {
+      const card = document.querySelector('#cards .card');
+      return Boolean(card && card.querySelector('.card-word')?.textContent === 'consolidate' && card.querySelector('.group'));
+    })()`,
+    '改词后的卡片',
+  );
+  check('卡片换成新词并重新拿到释义', renamed);
+  const renamedText = await evaluate(`document.querySelector('#cards .card').innerText`);
+  check('新词释义正确（巩固）', /巩固/.test(String(renamedText)), String(renamedText).split('\n').slice(0, 4).join(' / '));
+  check('标注了「改自」原词', String(renamedText).includes('改自 consolidation'));
+  check('卡片数量没有变', (await evaluate(`document.querySelectorAll('#cards .card').length`)) === 1);
+
+  console.log('\n5b) 拼写自动纠错：故意打错一个词');
+  const typoSubmitted = await evaluate(`(() => {
+    const card = document.querySelector('#cards .card');
+    if (!card) return false;
+    card.querySelector('.card-word').click();
+    const input = document.querySelector('#cards .card-word-input');
+    if (!input) return false;
+    input.value = 'procastinate';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    return true;
+  })()`);
+  check('提交了错误拼写 procastinate', Boolean(typoSubmitted));
+  const autoFixed = await waitFor(
+    `(() => {
+      const card = document.querySelector('#cards .card');
+      return Boolean(card && card.querySelector('.card-word')?.textContent === 'procrastinate' && card.querySelector('.group'));
+    })()`,
+    '自动纠错后的卡片',
+  );
+  check('自动纠正成 procrastinate', autoFixed);
+  const fixedText = await evaluate(`document.querySelector('#cards .card').innerText`);
+  check('显示「已纠正 原词 → 正确词」', /已纠正\s*procastinate\s*→\s*procrastinate/.test(String(fixedText)), String(fixedText).split('\n')[1] ?? '');
+  check('纠正后释义正确（延迟/耽搁）', /延迟|耽搁/.test(String(fixedText)));
+  const toastText = await evaluate(`[...document.querySelectorAll('#toast .toast')].map(t => t.textContent).join('|')`);
+  check('弹出纠正提示', /已自动纠正拼写/.test(String(toastText)), String(toastText));
+  check('纠错没有多出卡片', (await evaluate(`document.querySelectorAll('#cards .card').length`)) === 1);
+  await shot('e2e-correct.png');
+
+  console.log('\n5d) 输入时的拼写建议（Tab 采纳）');
+  await evaluate(`(() => {
+    const card = document.querySelector('#cards .card');
+    card.querySelector('.card-word').click();
+    const input = document.querySelector('#cards .card-word-input');
+    if (!input) return false;
+    input.value = 'recieve';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  const hintShown = await waitFor(
+    `(() => { const h = document.querySelector('.edit-hint'); return Boolean(h && !h.hidden && h.textContent.includes('receive')); })()`,
+    '拼写建议条',
+    5000,
+  );
+  check('输入 recieve 时出现拼写建议', hintShown);
+  await shot('e2e-suggest.png');
+  await evaluate(
+    `document.querySelector('#cards .card-word-input')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))`,
+  );
+  const tabAccepted = await waitFor(
+    `document.querySelector('#cards .card .card-word')?.textContent === 'receive'`,
+    'Tab 采纳建议',
+    8000,
+  );
+  check('Tab 采纳建议后变成 receive', tabAccepted);
+  const afterTab = await evaluate(`document.querySelector('#cards .card').innerText`);
+  check('采纳正确拼写后不再显示旧的「已纠正」标签', !String(afterTab).includes('已纠正'), String(afterTab).split('\n')[1] ?? '');
+
+  console.log('\n5c) 未收录词给出「是否想查」建议');
+  const manualSuggest = await evaluate(`(() => {
+    document.querySelector('#manualInput').value = 'concensus';
+    document.querySelector('#btnManual').click();
+    return true;
+  })()`);
+  check('手动输入未收录词', Boolean(manualSuggest));
+  await sleep(900);
+  const guessChip = await evaluate(`Boolean(document.querySelector('#cards .chip.guess'))`);
+  check('出现「是否想查 consensus？」建议', Boolean(guessChip));
+  await evaluate(`document.querySelector('#cards .chip.guess')?.click()`);
+  await sleep(900);
+  const guessApplied = await evaluate(`[...document.querySelectorAll('#cards .card')].some(c => c.querySelector('.card-word')?.textContent === 'consensus' && c.querySelector('.group'))`);
+  check('点建议后换成正确词并出释义', Boolean(guessApplied), `${await evaluate(`document.querySelectorAll('#cards .card').length`)} 张卡`);
+  // 把这张临时卡片清掉，后面的断言保持简单
+  await evaluate(`(() => {
+    const card = [...document.querySelectorAll('#cards .card')].find(c => c.querySelector('.card-word')?.textContent === 'consensus');
+    if (!card) return false;
+    const remove = [...card.querySelectorAll('button')].find(b => b.textContent === '移除');
+    if (remove) remove.click();
+    return true;
+  })()`);
+  await sleep(300);
+  check('清理临时卡片', (await evaluate(`document.querySelectorAll('#cards .card').length`)) === 1);
+
+  console.log('\n6) 文本层拖选（第二种选词方式）');
   await shot('e2e-overlay.png');
   await evaluate(`document.querySelector('#viewSeg .seg-btn[data-view="text"]').click()`);
   await sleep(300);
@@ -261,7 +386,23 @@ async function main(): Promise<void> {
   const withMeanings = await evaluate(`[...document.querySelectorAll('#cards .card')].filter(c => c.querySelector('.group')).length`);
   check('新增卡片都有词性释义', Number(withMeanings) >= after, `${withMeanings}/${after}`);
 
-  console.log('\n6) 加入生词本');
+  console.log('\n7) 改成已经选中的词会合并卡片');
+  const mergedTarget = await evaluate(`(() => {
+    const cards = [...document.querySelectorAll('#cards .card')];
+    if (cards.length < 2) return null;
+    const target = cards[1].querySelector('.card-word')?.textContent;
+    cards[0].querySelector('.card-word')?.click();
+    const input = document.querySelector('#cards .card-word-input');
+    if (!input) return null;
+    input.value = target;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    return target;
+  })()`);
+  await sleep(600);
+  const mergedCount = await evaluate(`document.querySelectorAll('#cards .card').length`);
+  check('重复词被合并成一张卡', Boolean(mergedTarget) && mergedCount === after - 1, `${after} → ${mergedCount}（目标：${mergedTarget}）`);
+
+  console.log('\n8) 加入生词本');
   const addClicked = await evaluate(`(() => {
     const btn = document.querySelector('#cards .card [data-act="add"]');
     if (!btn) return false;
@@ -275,7 +416,7 @@ async function main(): Promise<void> {
   const badge = await evaluate(`document.querySelector('#bookCount').textContent`);
   check('生词本角标同步', String(badge) === String(bookCount), `${badge}`);
 
-  console.log('\n7) 导出面板');
+  console.log('\n9) 导出面板');
   await evaluate(`document.querySelector('#btnExport').click()`);
   await sleep(900);
   const dialogOpen = await evaluate(`document.querySelector('#exportDialog').open`);
@@ -294,7 +435,7 @@ async function main(): Promise<void> {
   await sleep(400);
   await shot('e2e-main.png');
 
-  console.log('\n8) 深色截图自动反色识别');
+  console.log('\n10) 深色截图自动反色识别');
   const darkPath = join(SHOT_DIR, 'sample-dark.png');
   if (existsSync(darkPath)) {
     const darkBase64 = readFileSync(darkPath).toString('base64');
@@ -314,14 +455,13 @@ async function main(): Promise<void> {
     check('深色截图测试素材存在', false, darkPath);
   }
 
-  console.log('\n9) 清理');
-  await evaluate(`fetch('/api/wordbook', { method: 'DELETE', headers: {'content-type':'application/json'}, body: JSON.stringify({ all: true }) }).then(r => r.status)`);
-  const cleaned = await evaluate(`fetch('/api/wordbook').then(r => r.json()).then(d => d.count)`);
-  check('验证后恢复空生词本', cleaned === 0, `count=${cleaned}`);
-
+  console.log('\n11) 收尾');
+  // 只清临时目录；真实生词本 data/words.json 全程没被碰过
   cdp.close();
   chrome.kill();
   if (serverProcess) serverProcess.kill();
+  rmSync(tempDir, { recursive: true, force: true });
+  check('清理临时验证数据', !existsSync(tempDir), tempDir);
 
   const failed = checks.filter((item) => !item.pass);
   console.log(`\n${failed.length ? '❌' : '✅'} 端到端验证：${checks.length - failed.length}/${checks.length} 项通过`);

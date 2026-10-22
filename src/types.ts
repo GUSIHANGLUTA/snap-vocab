@@ -41,6 +41,13 @@ export interface PosGroup {
   meanings: string[];
 }
 
+export interface LookupSuggestion {
+  /** 词库里最接近的正确拼写 */
+  word: string;
+  /** Damerau-Levenshtein 编辑距离（1 = 少/多/错一个字母或相邻字母颠倒） */
+  distance: number;
+}
+
 export interface LookupResult {
   /** 查询时的原始输入 */
   word: string;
@@ -60,6 +67,8 @@ export interface LookupResult {
   source: 'local' | 'online' | 'none';
   /** 词库缺失时的提示 */
   hint?: string;
+  /** 没收录时给出的拼写纠正建议（前端用来做自动纠错） */
+  suggestion?: LookupSuggestion;
 }
 
 export interface WordEntry {

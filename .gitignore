@@ -2,7 +2,7 @@ node_modules/
 data/dict.sqlite
 data/dict.sqlite.building
 data/words.json
+data/words.json.bak
+data/words.json.corrupt-*
 data/*.tmp
 data/tesseract-cache/
-screenshots/e2e-*.png
-!screenshots/e2e-main.png

@@ -6,7 +6,7 @@
  */
 import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import type { LookupResult, PosGroup } from './types.ts';
+import type { LookupResult, LookupSuggestion, PosGroup } from './types.ts';
 import { DICT_FILE, parseTags } from './dict-build.ts';
 
 /** 词性缩写 → 中文。ECDICT 的 translation 行首用的就是这些缩写。 */
@@ -334,12 +334,48 @@ function looksLikeDerivedForm(translation: string | null | undefined, key: strin
   return match[1].toLowerCase() !== key;
 }
 
+/**
+ * Damerau-Levenshtein 编辑距离（含相邻字母互换），超过 max 立刻返回 max+1。
+ * 纠错只需要知道「≤1 / ≤2 / 更差」，所以提前退出能把 400 个候选词的开销压到很小。
+ */
+export function damerauDistance(a: string, b: string, max: number): number {
+  const aLen = a.length;
+  const bLen = b.length;
+  if (Math.abs(aLen - bLen) > max) return max + 1;
+
+  let prevPrev = new Array<number>(bLen + 1).fill(0);
+  let prev = new Array<number>(bLen + 1).fill(0);
+  let cur = new Array<number>(bLen + 1).fill(0);
+  for (let j = 0; j <= bLen; j += 1) prev[j] = j;
+
+  for (let i = 1; i <= aLen; i += 1) {
+    cur[0] = i;
+    let rowMin = cur[0];
+    for (let j = 1; j <= bLen; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let value = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        value = Math.min(value, prevPrev[j - 2] + 1);
+      }
+      cur[j] = value;
+      if (value < rowMin) rowMin = value;
+    }
+    if (rowMin > max) return max + 1;
+    const recycled = prevPrev;
+    prevPrev = prev;
+    prev = cur;
+    cur = recycled;
+  }
+  return prev[bLen];
+}
+
 /** 本地词库封装；进程内单例，只读打开。 */
 export class Dict {
   private db: DatabaseSync | null = null;
   private stmtWord: ReturnType<DatabaseSync['prepare']> | null = null;
   private stmtForm: ReturnType<DatabaseSync['prepare']> | null = null;
   private stmtLemma: ReturnType<DatabaseSync['prepare']> | null = null;
+  private stmtPrefix: ReturnType<DatabaseSync['prepare']> | null = null;
   private cachedCount = 0;
   private readonly file: string;
 
@@ -366,6 +402,15 @@ export class Dict {
     );
     this.stmtForm = this.db.prepare('SELECT base FROM form WHERE form = ? LIMIT 3');
     this.stmtLemma = this.db.prepare('SELECT base FROM lemma WHERE form = ? LIMIT 3');
+    // 拼写纠错走前缀索引：LIKE 'abc%' 能吃到 word 上的 NOCASE 索引。
+    // 再按长度 ±2 过滤（编辑距离大于长度差是不可能的），并按词频排序取前 600 ——
+    // 实测目标词通常落在前 150 位，而 con/pro 这种大前缀的查询也只要几毫秒。
+    this.stmtPrefix = this.db.prepare(
+      `SELECT word, frq, tag FROM dict
+        WHERE word LIKE ? AND length(word) BETWEEN ? AND ?
+        ORDER BY CASE WHEN frq IS NULL OR frq = 0 THEN 999999 ELSE frq END
+        LIMIT 600`,
+    );
     const row = this.db.prepare("SELECT value FROM meta WHERE key = 'words'").get() as
       | { value: string }
       | undefined;
@@ -378,6 +423,7 @@ export class Dict {
     this.stmtWord = null;
     this.stmtForm = null;
     this.stmtLemma = null;
+    this.stmtPrefix = null;
   }
 
   private exact(key: string): DictRow | null {
@@ -424,6 +470,70 @@ export class Dict {
     return base ? { row: base, matchedForm: key } : null;
   }
 
+  /**
+   * 找一个词的拼写纠正建议。
+   *
+   * 做法：先用前 3 个字母（退化到前 2 个）走索引拿候选，再按 Damerau-Levenshtein 距离筛选，
+   * 同等距离下优先常用词（frq 小=常见）、其次有考试标签的、再其次字母序。
+   * 只在「词库查不到」时调用，所以不会把正确拼写改坏。
+   */
+  suggest(input: string): LookupSuggestion | null {
+    const key = normalizeKey(input);
+    if (!key || !this.ready) return null;
+    if (!key.includes(' ')) return this.suggestSingle(key);
+
+    // 词组：逐词纠正，至少一个词被改过才给建议
+    let changed = false;
+    const fixed = key.split(/\s+/).map((token) => {
+      const hit = this.suggestSingle(token);
+      if (hit) {
+        changed = true;
+        return hit.word;
+      }
+      return token;
+    });
+    return changed ? { word: fixed.join(' '), distance: 1 } : null;
+  }
+
+  private suggestSingle(key: string): LookupSuggestion | null {
+    if (!this.stmtPrefix || key.length < 3 || key.includes(' ')) return null;
+    if (this.findRow(key)) return null; // 已经能查到（含屈折还原）就不要纠正
+
+    const maxDistance = key.length <= 4 ? 1 : 2;
+    const seen = new Set<string>();
+    const candidates: Array<{ word: string; distance: number; rank: number }> = [];
+
+    for (const prefix of [key.slice(0, 3), key.slice(0, 2)]) {
+      if (prefix.length < 2) continue;
+      const rows = this.stmtPrefix.all(`${prefix}%`, key.length - maxDistance, key.length + maxDistance) as Array<{
+        word: string;
+        frq: number | null;
+        tag: string | null;
+      }>;
+      for (const row of rows) {
+        const lower = row.word.toLowerCase();
+        if (seen.has(lower)) continue;
+        seen.add(lower);
+        if (!/^[a-z][a-z'-]*$/.test(lower)) continue;
+        if (Math.abs(lower.length - key.length) > maxDistance) continue;
+        const distance = damerauDistance(key, lower, maxDistance);
+        if (distance === 0 || distance > maxDistance) continue;
+        // frq 是 COCA 排名，数字越小越常见；0/空表示没有排名
+        const rank = row.frq && row.frq > 0 ? row.frq : Number.MAX_SAFE_INTEGER;
+        candidates.push({ word: row.word, distance, rank });
+      }
+      // 前 3 个字母已经找到「差一个字母」的候选，就没必要再扫前 2 个字母（省一半时间）
+      if (candidates.some((candidate) => candidate.distance <= 1)) break;
+    }
+
+    if (!candidates.length) return null;
+    candidates.sort(
+      (a, b) => a.distance - b.distance || a.rank - b.rank || a.word.length - b.word.length || a.word.localeCompare(b.word),
+    );
+    const best = candidates[0];
+    return { word: best.word, distance: best.distance };
+  }
+
   /** 查一个词（可含屈折形式）。 */
   lookup(input: string): LookupResult {
     const key = normalizeKey(input);
@@ -441,7 +551,11 @@ export class Dict {
 
     const hit = this.findRow(key);
     if (!hit) {
-      return { ...base, hint: '本地词库未收录（可在线补全或手动填写）' };
+      return {
+        ...base,
+        hint: '本地词库未收录（可在线补全或手动填写）',
+        suggestion: this.suggest(key) ?? undefined,
+      };
     }
     const row = hit.row;
     return {

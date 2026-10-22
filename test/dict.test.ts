@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   Dict,
+  damerauDistance,
   flattenMeanings,
   normalizeKey,
   parseTranslation,
@@ -142,3 +143,62 @@ test('Dict.isLookupCandidate：过滤纯数字与符号', () => {
   assert.equal(Dict.isLookupCandidate('12345'), false);
   assert.equal(Dict.isLookupCandidate('——'), false);
 });
+
+test('damerauDistance：增删改与相邻字母互换都算 1 步', () => {
+  assert.equal(damerauDistance('recieve', 'receive', 2), 1); // ie -> ei 互换
+  assert.equal(damerauDistance('abc', 'abd', 2), 1); // 改一个字母
+  assert.equal(damerauDistance('abc', 'ab', 2), 1); // 少一个字母
+  assert.equal(damerauDistance('abc', 'abcd', 2), 1); // 多一个字母
+  assert.equal(damerauDistance('abc', 'xyz', 2), 3); // 超过上限时返回 max+1
+  assert.equal(damerauDistance('abc', 'abc', 2), 0);
+});
+
+test('Dict.suggest：常见拼写错误能纠正到正确的词', { skip: !dictReady && '词库未构建' }, () => {
+  const dict = new Dict();
+  dict.open();
+  try {
+    const cases: Array<[string, string]> = [
+      ['procastinate', 'procrastinate'],
+      ['recieve', 'receive'],
+      ['consolidaton', 'consolidation'],
+      ['recomend', 'recommend'],
+      ['seperate', 'separate'],
+      ['enviroment', 'environment'],
+      ['exacerbat', 'exacerbate'],
+      ['concensus', 'consensus'],
+    ];
+    for (const [typo, expected] of cases) {
+      const suggestion = dict.suggest(typo);
+      assert.equal(suggestion?.word, expected, `${typo} 应纠正为 ${expected}，实际 ${suggestion?.word}`);
+      assert.ok((suggestion?.distance ?? 9) <= 2);
+    }
+
+    // 本来就是正确拼写（含屈折还原）的，不该被“纠正”
+    assert.equal(dict.suggest('hello'), null);
+    assert.equal(dict.suggest('run'), null);
+    assert.equal(dict.suggest('screens'), null);
+    // 完全没意义的串不给建议
+    assert.equal(dict.suggest('qwzxvbn'), null);
+    // 太短的词不猜
+    assert.equal(dict.suggest('te'), null);
+  } finally {
+    dict.close();
+  }
+});
+
+test('Dict.lookup：未收录时带上拼写建议，收录时没有 suggestion', { skip: !dictReady && '词库未构建' }, () => {
+  const dict = new Dict();
+  dict.open();
+  try {
+    const missing = dict.lookup('procastinate');
+    assert.equal(missing.found, false);
+    assert.equal(missing.suggestion?.word, 'procrastinate');
+
+    const found = dict.lookup('procrastinate');
+    assert.equal(found.found, true);
+    assert.equal(found.suggestion, undefined);
+  } finally {
+    dict.close();
+  }
+});
+

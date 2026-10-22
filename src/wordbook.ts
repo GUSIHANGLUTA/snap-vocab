@@ -10,7 +10,10 @@ import { DATA_DIR } from './dict-build.ts';
 import { flattenMeanings, normalizeKey, summarizeGroups } from './dict.ts';
 import type { LookupResult, PosGroup, WordEntry } from './types.ts';
 
-export const WORDS_FILE = resolve(DATA_DIR, 'words.json');
+/** 生词本文件；测试/端到端验证可以用 SNAP_WORDS_FILE 指到临时文件，避免动到真实数据。 */
+export const WORDS_FILE = process.env.SNAP_WORDS_FILE
+  ? resolve(process.env.SNAP_WORDS_FILE)
+  : resolve(DATA_DIR, 'words.json');
 
 interface StoreFile {
   version: number;
@@ -75,6 +78,14 @@ export class Wordbook {
     const payload: StoreFile = { version: 1, updatedAt: nowIso(), entries: this.entries };
     const tmp = `${this.file}.tmp`;
     writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+    // 覆盖前先把上一版留成 .bak：误删/误清空时还能手工找回来
+    if (existsSync(this.file)) {
+      try {
+        copyFileSync(this.file, `${this.file}.bak`);
+      } catch {
+        /* 备份失败不影响主流程 */
+      }
+    }
     renameSync(tmp, this.file);
   }
 
