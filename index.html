@@ -473,36 +473,41 @@
         <div class="grid">
           <article class="card">
             <span class="card-number">01 / OCR</span>
-            <h3>截图直接选词</h3>
-            <p>粘贴截图后按词级定位，点击图片上的单词即可加入整理列表。</p>
+            <h3>多张截图一起选词</h3>
+            <p>粘贴截图后按词级定位，点击图上的单词即可加入列表；连续贴多张，每张各自记着自己的选词，点缩略图随时切回。</p>
           </article>
           <article class="card">
-            <span class="card-number">02 / DICTIONARY</span>
+            <span class="card-number">02 / ACCURACY</span>
+            <h3>小字放大、断词合回</h3>
+            <p>鼠标停在图上弹出 2.6× 局部放大镜（页面不缩放）；小截图先放大再识别，深度识别补回漏字，被拆开的单词按词库合回一个词。</p>
+          </article>
+          <article class="card">
+            <span class="card-number">03 / DICTIONARY</span>
             <h3>释义按词性分组</h3>
             <p>给出音标、中文释义、考试标签、COCA/BNC 词频和屈折形式还原。</p>
           </article>
           <article class="card">
-            <span class="card-number">03 / EDIT &amp; SPELLCHECK</span>
+            <span class="card-number">04 / EDIT &amp; SPELLCHECK</span>
             <h3>选错能改，拼错自动纠</h3>
             <p>卡片上的单词可以直接改；拼写错误的词会按编辑距离自动纠正到词库里的正确拼法，并保留撤销。</p>
           </article>
           <article class="card">
-            <span class="card-number">04 / WORDBOOK</span>
+            <span class="card-number">05 / WORDBOOK</span>
             <h3>生词本留在本地</h3>
             <p>生词写入 data/words.json（每次保存留一份 .bak），可标记已背、筛选并随时导出。</p>
           </article>
           <article class="card">
-            <span class="card-number">05 / EXPORT</span>
+            <span class="card-number">06 / EXPORT</span>
             <h3>生成自制词书</h3>
             <p>导出纯单词 TXT、单词加释义或 CSV，走不背单词的官方导入路径。</p>
           </article>
           <article class="card">
-            <span class="card-number">06 / PRIVACY</span>
+            <span class="card-number">07 / PRIVACY</span>
             <h3>截图不上传</h3>
             <p>服务只监听 127.0.0.1，截图交给本地识别进程，不发送到第三方。</p>
           </article>
           <article class="card">
-            <span class="card-number">07 / OPEN SOURCE</span>
+            <span class="card-number">08 / OPEN SOURCE</span>
             <h3>源码可审查</h3>
             <p>前后端源码、测试、OCR 流程和词典构建脚本全部开放。</p>
           </article>
@@ -521,11 +526,11 @@
           </article>
           <article class="step">
             <strong>粘贴英文截图</strong>
-            <span>按 Ctrl + V，或者把图片拖入左侧区域。</span>
+            <span>按 Ctrl + V，或者把图片拖入左侧区域；可以连贴多张，各自记着自己的选词。</span>
           </article>
           <article class="step">
             <strong>点选需要的单词</strong>
-            <span>在图片、文本视图或输入框中选出要背的词；选错或拼错会自动纠正。</span>
+            <span>鼠标停图上有局部放大镜，点小字也准；选错或拼错会自动纠正，断开的单词会合回一个。</span>
           </article>
           <article class="step">
             <strong>导出到不背单词</strong>

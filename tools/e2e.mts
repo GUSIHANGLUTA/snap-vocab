@@ -214,6 +214,7 @@ async function main(): Promise<void> {
   check('OCR 生成了词级热区', hitsFound, `${hitCount} 个热区`);
   const ocrInfo = await evaluate(`document.querySelector('#ocrInfo').textContent`);
   check('识别信息展示', String(ocrInfo).includes('词'), String(ocrInfo));
+  check('深度识别补回了深色条的字', /补回/.test(String(ocrInfo)), String(ocrInfo));
   const textHasSentence = await evaluate(`document.querySelector('#textLayer').innerText.includes('consolidation')`);
   check('文本层包含识别文本', Boolean(textHasSentence));
 
@@ -453,6 +454,76 @@ async function main(): Promise<void> {
     await shot('e2e-dark.png');
   } else {
     check('深色截图测试素材存在', false, darkPath);
+  }
+
+  console.log('\n10b) 多张截图的临时记忆');
+  const thumbCount = await evaluate(`document.querySelectorAll('#thumbs .thumb').length`);
+  check('两张截图都在缩略图条里', thumbCount === 2, `${thumbCount} 张`);
+  const secondIsActive = await evaluate(`document.querySelectorAll('#thumbs .thumb')[1]?.classList.contains('active')`);
+  check('当前激活的是刚贴的深色图', Boolean(secondIsActive));
+  const darkPicked = await evaluate(`document.querySelector('#pickedCount').textContent`);
+  check('新图是一份独立的选词', darkPicked === '0', `picked=${darkPicked}`);
+
+  await evaluate(`document.querySelectorAll('#thumbs .thumb')[0].click()`);
+  await sleep(700);
+  const backPicked = await evaluate(`document.querySelector('#pickedCount').textContent`);
+  const backCards = await evaluate(`document.querySelectorAll('#cards .card').length`);
+  const backHits = await evaluate(`document.querySelectorAll('#overlay .hit').length`);
+  const backInfo = await evaluate(`document.querySelector('#ocrInfo').textContent`);
+  check('切回第一张图，选词还在（9 个）', backPicked === '9' && backCards === 9, `picked=${backPicked} cards=${backCards}`);
+  check('切回后识别结果也还在', Number(backHits) > 10 && /词/.test(String(backInfo)), `${backHits} 热区 · ${backInfo}`);
+  const backSrc = await evaluate(`document.querySelector('#shotImage').src.startsWith('data:image')`);
+  check('切回后显示的是第一张图', Boolean(backSrc));
+
+  console.log('\n10c) 局部放大镜（只放大图片，不缩放页面）');
+  const lensPoint = await evaluate(`(() => {
+    const r = document.querySelector('#stage').getBoundingClientRect();
+    return { x: Math.round(r.left + r.width * 0.45), y: Math.round(r.top + r.height * 0.35) };
+  })()`);
+  const widthBefore = await evaluate(`document.documentElement.scrollWidth`);
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: lensPoint.x, y: lensPoint.y, button: 'none' }, sessionId);
+  await sleep(350);
+  const lensState = await evaluate(`(() => {
+    const lens = document.querySelector('#lens');
+    const style = getComputedStyle(lens);
+    return {
+      hidden: lens.hidden,
+      hasImage: style.backgroundImage.includes('data:image'),
+      position: style.backgroundPosition,
+      size: style.backgroundSize,
+    };
+  })()`);
+  check('鼠标停在图上出现放大镜', !lensState.hidden && lensState.hasImage, `${lensState.size} @ ${lensState.position}`);
+  const widthAfter = await evaluate(`document.documentElement.scrollWidth`);
+  check('放大镜不会放大整个页面', widthAfter === widthBefore, `${widthBefore} → ${widthAfter}`);
+  await shot('e2e-lens.png');
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 4, y: 4, button: 'none' }, sessionId);
+  await sleep(300);
+  check('移出图片后放大镜消失', Boolean(await evaluate(`document.querySelector('#lens').hidden`)));
+
+  console.log('\n10d) 断词合并（conso lidation）');
+  const splitPath = join(SHOT_DIR, 'test-split.png');
+  if (existsSync(splitPath)) {
+    const splitBase64 = readFileSync(splitPath).toString('base64');
+    await evaluate(`(async () => {
+      const blob = await (await fetch('data:image/png;base64,${splitBase64}')).blob();
+      await window.__snap.acceptImage(blob);
+      return true;
+    })()`);
+    await waitFor(`document.querySelectorAll('#overlay .hit').length >= 4`, '断词图热区');
+    await sleep(400);
+    const splitText = await evaluate(`document.querySelector('#textLayer').innerText`);
+    const splitInfo = await evaluate(`document.querySelector('#ocrInfo').textContent`);
+    check('被拆开的单词合并成一个', /consolidation/i.test(String(splitText)), String(splitText).slice(0, 80));
+    check('识别信息记录了合并数', /合并断词/.test(String(splitInfo)), String(splitInfo));
+    const splitClickable = await evaluate(
+      `[...document.querySelectorAll('#overlay .hit')].some(h => (h.title || '').toLowerCase() === 'consolidation')`,
+    );
+    check('合并后的单词可以点选', Boolean(splitClickable));
+    check('第三张图也记住了', (await evaluate(`document.querySelectorAll('#thumbs .thumb').length`)) === 3);
+    await shot('e2e-split.png');
+  } else {
+    check('断词测试素材存在', false, splitPath);
   }
 
   console.log('\n11) 收尾');

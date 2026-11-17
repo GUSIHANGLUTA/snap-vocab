@@ -573,6 +573,13 @@ export class Dict {
     };
   }
 
+  /** 词库里是否有这个拼写（精确匹配，不做屈折还原，也不纠错）—— OCR 合并断词时用。 */
+  hasWord(input: string): boolean {
+    const key = normalizeKey(input);
+    if (!key) return false;
+    return Boolean(this.exact(key));
+  }
+
   /** 批量查词，保序，顺手去重。 */
   lookupMany(inputs: string[]): LookupResult[] {
     const seen = new Set<string>();

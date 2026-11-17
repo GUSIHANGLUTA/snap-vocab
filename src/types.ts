@@ -28,6 +28,13 @@ export interface OcrResult {
   lines: OcrLine[];
   /** 全文（换行分隔），文本层直接展示 */
   text: string;
+  /** 被「拆成两个」后合回去的单词数 */
+  mergedWords?: number;
+  /** 深度识别补回来的词数（主扫描漏掉的部分） */
+  supplementedWords?: number;
+  /** 送识别时的放大倍数（坐标已除回原图） */
+  scale?: number;
+  deepScan?: boolean;
 }
 
 /** 一个词性分组，例如 n. + 名词 + ["跑", "赛跑"] */

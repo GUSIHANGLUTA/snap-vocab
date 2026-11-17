@@ -32,15 +32,17 @@
             <button class="seg-btn active" data-view="image" type="button">图片</button>
             <button class="seg-btn" data-view="text" type="button">文本</button>
           </div>
+          <button id="btnLens" class="btn tiny lens-btn" type="button" aria-pressed="true" title="鼠标停在图上时局部放大（不动页面）">🔍 放大镜</button>
           <label class="zoom">缩放
             <input id="zoom" type="range" min="100" max="260" step="10" value="100" />
           </label>
         </div>
+        <div class="thumbs" id="thumbs" hidden></div>
         <div class="dropzone" id="dropzone">
           <div class="dz-empty" id="dzEmpty">
             <div class="dz-icon">📋</div>
             <p><b>Ctrl + V</b> 粘贴截图，或把图片拖到这里</p>
-            <p class="hint">Win + Shift + S 截图 → 回到本页 Ctrl+V</p>
+            <p class="hint">可以连续贴多张：每张图各自记住自己的识别结果和选词，切换不丢</p>
             <button id="btnPick" class="btn primary" type="button">选择图片…</button>
           </div>
           <div class="stage" id="stage" hidden>
@@ -54,9 +56,12 @@
         </div>
         <div class="shot-foot">
           <span id="ocrInfo" class="hint">等待截图…</span>
+          <label class="toggle" title="PSM 6 二次扫描：能补回深色条/低对比区域漏掉的字，耗时约翻倍">
+            <input type="checkbox" id="deepScan" checked /> 深度识别
+          </label>
           <span style="margin-left: auto"></span>
           <button id="btnRetryInvert" class="btn tiny ghost" type="button" hidden>反色重识别</button>
-          <button id="btnClearShot" class="btn tiny ghost" type="button" hidden>清空截图</button>
+          <button id="btnClearShot" class="btn tiny ghost" type="button" hidden>移除这张</button>
         </div>
       </section>
 
@@ -140,6 +145,8 @@
         <ol class="steps">
           <li>按 <span class="kbd">Win</span> + <span class="kbd">Shift</span> + <span class="kbd">S</span> 截图，或直接复制网页上的图片，回到本页按 <span class="kbd">Ctrl</span> + <span class="kbd">V</span>。</li>
           <li>识别完成后，在截图上**点单词**选区；点第二下取消。也可以在「文本」标签里拖选一整句。</li>
+          <li>鼠标停在图上会弹出局部放大镜（只放大图片，不缩放页面），小字也点得准。</li>
+          <li>可以连续贴多张截图：每张图有自己的识别结果和选词，点下方缩略图切换，切回来还在。</li>
           <li>右侧卡片会给出音标、按词性分组的中文释义、考试标签和原形（如 screens → screen）。</li>
           <li>点「加入生词本」，攒够一批后点「导出到不背单词」，复制或下载 txt。</li>
           <li>浏览器打开 bbdc.cn 登录 → 左上角「自制词书」上传 txt → 手机 App 里「词书 / 换本词书 → 自制」就能背了。</li>
@@ -148,6 +155,7 @@
       </div>
     </dialog>
 
+    <div id="lens" class="lens" hidden><span id="lensZoom" class="lens-zoom"></span></div>
     <div id="toast"></div>
     <script type="module" src="/app.js"></script>
   </body>

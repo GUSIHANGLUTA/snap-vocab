@@ -165,16 +165,23 @@ async function handleApi(
         ocrMaxImageBytes: 16 * 1024 * 1024,
         lookupMaxWords: 200,
         exportModes: ['plain', 'gloss', 'csv'],
+        ocrUpscale: { small: 3, medium: 2 },
       },
     });
     return true;
   }
 
   if (path === '/api/ocr' && method === 'POST') {
-    const body = await readJson<{ image?: string }>(req);
+    const body = await readJson<{ image?: string; scale?: number; deepScan?: boolean }>(req);
     const buffer = decodeImage(body.image ?? '');
+    const scale = Number(body.scale);
     try {
-      const result = await recognizeImage(buffer);
+      const result = await recognizeImage(buffer, {
+        scale: Number.isFinite(scale) && scale >= 1 && scale <= 4 ? scale : 1,
+        deepScan: body.deepScan !== false,
+        // 用词库校验断词，conso + lidation -> consolidation
+        isWord: (word) => dict.hasWord(word),
+      });
       sendJson(res, 200, result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

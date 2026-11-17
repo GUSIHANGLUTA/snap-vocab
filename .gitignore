@@ -6,3 +6,6 @@ data/words.json.bak
 data/words.json.corrupt-*
 data/*.tmp
 data/tesseract-cache/
+
+# tesseract.js 在没有 cachePath 时会写到当前目录
+*.traineddata

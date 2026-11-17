@@ -36,6 +36,10 @@ function tokenize(text) {
 const state = {
   config: null,
   health: null,
+  /** 本次会话里贴过的所有截图，每张自带 OCR 结果与选词（临时记忆，切换不丢） */
+  images: [],
+  activeId: null,
+  // 下面这些是「当前图片」的别名，切换图片时整体换掉
   ocr: null,
   image: { dataUrl: '', width: 0, height: 0, inverted: false },
   selected: new Map(),
@@ -46,6 +50,8 @@ const state = {
   bookFilter: 'all',
   view: 'image',
   busy: false,
+  lensOn: true,
+  deepScan: true,
 };
 
 /* ------------------------------ 通用 ------------------------------ */
@@ -148,21 +154,179 @@ async function averageBrightness(img) {
   return count ? sum / count : 255;
 }
 
-async function invertedDataUrl(img) {
-  const canvas = document.createElement('canvas');
-  canvas.width = img.naturalWidth;
-  canvas.height = img.naturalHeight;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(img, 0, 0);
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const pixels = imageData.data;
-  for (let i = 0; i < pixels.length; i += 4) {
-    pixels[i] = 255 - pixels[i];
-    pixels[i + 1] = 255 - pixels[i + 1];
-    pixels[i + 2] = 255 - pixels[i + 2];
+/**
+ * 送 OCR 之前在小画布上重画一遍：必要时放大（小字号截图放大后识别准很多）+ 反色。
+ * 返回的 scale 要一起发给服务端，服务端会把 bbox 除回来，前端按原图尺寸定位。
+ */
+function estimateScale(width) {
+  if (!width) return 1;
+  if (width < 640) return 3;
+  if (width < 1000) return 2;
+  return 1;
+}
+
+async function buildOcrPayload(img, { invert }) {
+  const scale = estimateScale(img.naturalWidth);
+  if (scale === 1 && !invert) {
+    return { dataUrl: state.image.dataUrl, scale: 1 };
   }
-  ctx.putImageData(imageData, 0, 0);
-  return canvas.toDataURL('image/png');
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  if (invert) {
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const pixels = imageData.data;
+    for (let i = 0; i < pixels.length; i += 4) {
+      pixels[i] = 255 - pixels[i];
+      pixels[i + 1] = 255 - pixels[i + 1];
+      pixels[i + 2] = 255 - pixels[i + 2];
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }
+  return { dataUrl: canvas.toDataURL('image/png'), scale };
+}
+
+/* ------------------------------ 多张截图的临时记忆 ------------------------------ */
+
+function activeImage() {
+  return state.images.find((record) => record.id === state.activeId) ?? null;
+}
+
+function createImageRecord(dataUrl, width, height) {
+  return {
+    id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    dataUrl,
+    width,
+    height,
+    ocr: null,
+    info: '识别中…',
+    inverted: false,
+    selected: new Map(),
+    results: new Map(),
+    addedKeys: new Set(),
+    pendingKeys: new Set(),
+  };
+}
+
+/** 切换图片前，把当前「活」的状态写回这张图的记录里。 */
+function saveActive() {
+  const record = activeImage();
+  if (!record) return;
+  record.ocr = state.ocr;
+  record.inverted = state.image.inverted;
+  record.selected = state.selected;
+  record.results = state.results;
+  record.addedKeys = state.addedKeys;
+  record.pendingKeys = state.pendingKeys;
+  record.info = $('#ocrInfo').textContent;
+}
+
+/** 把某张图的状态装回全局别名，并重绘所有面板。 */
+function loadActive(record) {
+  state.activeId = record.id;
+  state.ocr = record.ocr;
+  state.image = { dataUrl: record.dataUrl, width: record.width, height: record.height, inverted: record.inverted };
+  state.selected = record.selected;
+  state.results = record.results;
+  state.addedKeys = record.addedKeys;
+  state.pendingKeys = record.pendingKeys;
+
+  const img = $('#shotImage');
+  img.src = record.dataUrl;
+  setOcrInfo(record.info || '等待识别…');
+  $('#btnClearShot').hidden = false;
+  $('#btnRetryInvert').hidden = !record.ocr;
+  $('#btnRetryInvert').textContent = record.inverted ? '原图重识别' : '反色重识别';
+  $('#dzEmpty').hidden = true;
+  renderThumbs();
+  renderOverlay();
+  renderTextLayer();
+  renderCards();
+  switchView(state.view);
+  applyZoom();
+}
+
+function activateImage(id) {
+  if (id === state.activeId) return;
+  const record = state.images.find((item) => item.id === id);
+  if (!record) return;
+  saveActive();
+  loadActive(record);
+}
+
+function removeImage(id) {
+  const index = state.images.findIndex((record) => record.id === id);
+  if (index < 0) return;
+  const wasActive = state.activeId === id;
+  state.images.splice(index, 1);
+
+  if (!state.images.length) {
+    state.activeId = null;
+    state.ocr = null;
+    state.image = { dataUrl: '', width: 0, height: 0, inverted: false };
+    state.selected = new Map();
+    state.results = new Map();
+    state.addedKeys = new Set();
+    state.pendingKeys = new Set();
+    $('#shotImage').removeAttribute('src');
+    $('#stage').hidden = true;
+    $('#dzEmpty').hidden = false;
+    $('#btnClearShot').hidden = true;
+    $('#btnRetryInvert').hidden = true;
+    setOcrInfo('等待截图…');
+    renderThumbs();
+    renderOverlay();
+    renderTextLayer();
+    renderCards();
+    return;
+  }
+
+  if (wasActive) {
+    loadActive(state.images[Math.min(index, state.images.length - 1)]);
+  } else {
+    renderThumbs();
+  }
+}
+
+/** 底部缩略图条：点一下切回那张图，选中词、识别结果都还在。 */
+function renderThumbs() {
+  const strip = $('#thumbs');
+  strip.innerHTML = '';
+  strip.hidden = state.images.length === 0;
+  if (!state.images.length) return;
+
+  for (const [index, record] of state.images.entries()) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `thumb${record.id === state.activeId ? ' active' : ''}`;
+    item.title = `第 ${index + 1} 张 · ${record.selected.size} 个词`;
+
+    const picture = document.createElement('img');
+    picture.src = record.dataUrl;
+    picture.alt = '';
+    picture.draggable = false;
+
+    const badge = document.createElement('span');
+    badge.className = 'thumb-count';
+    badge.textContent = String(record.selected.size);
+
+    const remove = document.createElement('span');
+    remove.className = 'thumb-del';
+    remove.textContent = '×';
+    remove.title = '移除这张图';
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation();
+      removeImage(record.id);
+    });
+
+    item.append(picture, badge, remove);
+    item.addEventListener('click', () => activateImage(record.id));
+    strip.append(item);
+  }
 }
 
 async function acceptImage(blob) {
@@ -172,22 +336,16 @@ async function acceptImage(blob) {
   }
   try {
     const dataUrl = await blobToDataUrl(blob);
-    const img = $('#shotImage');
-    img.src = dataUrl;
-    await img.decode();
-    state.image = { dataUrl, width: img.naturalWidth, height: img.naturalHeight, inverted: false };
-    $('#dzEmpty').hidden = true;
-    $('#btnClearShot').hidden = false;
-    $('#btnRetryInvert').hidden = true;
-    state.ocr = null;
-    state.selected.clear();
-    state.results.clear();
-    state.addedKeys.clear();
-    renderCards();
-    renderOverlay();
-    renderTextLayer();
-    applyZoom();
-    switchView(state.view);
+    const probe = new Image();
+    probe.src = dataUrl;
+    await probe.decode();
+    saveActive(); // 先把上一张的选词存好，再开新图
+    const record = createImageRecord(dataUrl, probe.naturalWidth, probe.naturalHeight);
+    state.images.push(record);
+    loadActive(record);
+    if (state.images.length > 1) {
+      toast(`已加入第 ${state.images.length} 张截图，前面几张的选词都还在`, 'ok');
+    }
     await runOcr(false);
   } catch (error) {
     toast(`打开图片失败：${error.message}`, 'error');
@@ -196,8 +354,9 @@ async function acceptImage(blob) {
 
 /** OCR。forceInvert=true 时用反色图再识别一次（深色界面/白字截图）。 */
 async function runOcr(forceInvert) {
+  const record = activeImage();
   const img = $('#shotImage');
-  if (!img.naturalWidth) return;
+  if (!record || !img.naturalWidth) return;
   state.busy = true;
   $('#btnRetryInvert').disabled = true;
   setOcrInfo('识别中…');
@@ -207,25 +366,36 @@ async function runOcr(forceInvert) {
       const brightness = await averageBrightness(img);
       if (brightness < 110) inverted = true;
     }
-    let payload = state.image.dataUrl;
-    if (inverted) {
-      setOcrInfo('识别中…（反色）');
-      payload = await invertedDataUrl(img);
-    }
-    const result = await api('/api/ocr', { method: 'POST', body: { image: payload } });
+    if (inverted) setOcrInfo('识别中…（反色）');
+    const payload = await buildOcrPayload(img, { invert: inverted });
+    const result = await api('/api/ocr', {
+      method: 'POST',
+      body: { image: payload.dataUrl, scale: payload.scale, deepScan: state.deepScan },
+    });
     state.ocr = result;
     state.image.inverted = inverted;
+    record.ocr = result;
+    record.inverted = inverted;
+
     const wordCount = result.lines.reduce((sum, line) => sum + line.words.length, 0);
-    setOcrInfo(
-      `${result.lines.length} 行 · ${wordCount} 词 · ${(result.ms / 1000).toFixed(1)}s${inverted ? ' · 反色识别' : ''}`,
-    );
+    const notes = [];
+    if (result.mergedWords) notes.push(`合并断词 ${result.mergedWords}`);
+    if (result.supplementedWords) notes.push(`补回 ${result.supplementedWords} 词`);
+    if (inverted) notes.push('反色');
+    if (payload.scale > 1) notes.push(`${payload.scale}×放大`);
+    const info = `${result.lines.length} 行 · ${wordCount} 词 · ${(result.ms / 1000).toFixed(1)}s${notes.length ? ` · ${notes.join(' · ')}` : ''}`;
+    setOcrInfo(info);
+    record.info = info;
+
     $('#btnRetryInvert').hidden = false;
     $('#btnRetryInvert').textContent = inverted ? '原图重识别' : '反色重识别';
+    renderThumbs();
     renderOverlay();
     renderTextLayer();
     if (!wordCount) toast('没识别出文字。可以试试「反色重识别」，或用「文本」标签手动粘贴。', 'error');
   } catch (error) {
     setOcrInfo('识别失败');
+    record.info = '识别失败';
     toast(error.message, 'error');
   } finally {
     state.busy = false;
@@ -233,22 +403,11 @@ async function runOcr(forceInvert) {
   }
 }
 
+/** 清空 = 只移除当前这张图；其它图仍在下面的缩略图条里。 */
 function clearShot() {
-  state.ocr = null;
-  state.image = { dataUrl: '', width: 0, height: 0, inverted: false };
-  state.selected.clear();
-  state.results.clear();
-  state.addedKeys.clear();
-  $('#shotImage').removeAttribute('src');
-  $('#stage').hidden = true;
-  $('#dzEmpty').hidden = false;
-  $('#btnClearShot').hidden = true;
-  $('#btnRetryInvert').hidden = true;
-  setOcrInfo('等待截图…');
-  renderOverlay();
-  renderTextLayer();
-  renderCards();
+  if (state.activeId) removeImage(state.activeId);
 }
+
 
 /** 在截图上铺词级热区：用百分比定位，缩放时自动跟随。 */
 function renderOverlay() {
@@ -308,6 +467,61 @@ function applyZoom() {
   $('#stage').style.width = `${zoom}%`;
 }
 
+/* ------------------------------ 局部放大镜 ------------------------------ */
+
+const LENS_SIZE = 240;
+const LENS_SCALE = 2.6;
+
+/** 鼠标停在截图上时，用一块 fixed 定位的圆形浮层做局部放大：只放大图片，页面布局完全不动。 */
+function moveLens(event) {
+  const lens = $('#lens');
+  const stage = $('#stage');
+  if (!state.lensOn || state.view !== 'image' || !state.image.dataUrl || stage.hidden) {
+    lens.hidden = true;
+    return;
+  }
+  const rect = stage.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    lens.hidden = true;
+    return;
+  }
+  const x = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+  const y = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
+
+  const bgWidth = rect.width * LENS_SCALE;
+  const bgHeight = rect.height * LENS_SCALE;
+  lens.style.backgroundImage = `url("${state.image.dataUrl}")`;
+  lens.style.backgroundSize = `${bgWidth}px ${bgHeight}px`;
+  lens.style.backgroundPosition = `${-(x * bgWidth - LENS_SIZE / 2)}px ${-(y * bgHeight - LENS_SIZE / 2)}px`;
+
+  // 靠近窗口边缘时翻到另一侧，别被裁掉
+  const offset = 20;
+  let left = event.clientX + offset;
+  if (left + LENS_SIZE > window.innerWidth - 8) left = event.clientX - LENS_SIZE - offset;
+  let top = event.clientY - LENS_SIZE / 2;
+  top = Math.max(8, Math.min(window.innerHeight - LENS_SIZE - 8, top));
+  lens.style.left = `${Math.max(8, left)}px`;
+  lens.style.top = `${top}px`;
+  lens.hidden = false;
+
+  const hint = $('#lensZoom');
+  if (hint) hint.textContent = `${LENS_SCALE}×`;
+}
+
+function hideLens() {
+  $('#lens').hidden = true;
+}
+
+function setLensEnabled(on) {
+  state.lensOn = Boolean(on);
+  const button = $('#btnLens');
+  if (button) {
+    button.classList.toggle('on', state.lensOn);
+    button.setAttribute('aria-pressed', String(state.lensOn));
+  }
+  if (!state.lensOn) hideLens();
+}
+
 function switchView(view) {
   state.view = view;
   for (const btn of document.querySelectorAll('#viewSeg .seg-btn')) {
@@ -318,6 +532,7 @@ function switchView(view) {
   $('#dzEmpty').hidden = hasImage;
   $('#dropzone').hidden = view === 'text';
   $('#textView').hidden = view !== 'text';
+  if (view !== 'image') hideLens();
 }
 
 /* ------------------------------ 选词 / 查词 ------------------------------ */
@@ -625,6 +840,12 @@ function syncHighlights() {
     el.classList.toggle('sel', state.selected.has(el.dataset.key));
   }
   $('#pickedCount').textContent = String(state.selected.size);
+  // 缩略图上的计数跟着变（其它图不用重绘）
+  const activeIndex = state.images.findIndex((record) => record.id === state.activeId);
+  const badge = document.querySelectorAll('#thumbs .thumb-count')[activeIndex];
+  if (badge) badge.textContent = String(state.selected.size);
+  const thumb = document.querySelectorAll('#thumbs .thumb')[activeIndex];
+  if (thumb) thumb.title = `第 ${activeIndex + 1} 张 · ${state.selected.size} 个词`;
 }
 
 /* ------------------------------ 卡片 ------------------------------ */
@@ -1154,6 +1375,26 @@ function bindEvents() {
   $('#btnClearShot').addEventListener('click', clearShot);
   $('#btnRetryInvert').addEventListener('click', () => void runOcr(!state.image.inverted));
 
+  // 局部放大镜：鼠标在图上来回移动只放大图片本身（fixed 浮层，不动页面布局）
+  const stage = $('#stage');
+  stage.addEventListener('pointermove', moveLens);
+  stage.addEventListener('pointerdown', moveLens);
+  stage.addEventListener('pointerleave', hideLens);
+  stage.addEventListener('pointercancel', hideLens);
+  $('#dropzone').addEventListener('scroll', hideLens, { passive: true });
+  window.addEventListener('scroll', hideLens, { passive: true });
+  $('#btnLens').addEventListener('click', () => setLensEnabled(!state.lensOn));
+  setLensEnabled(true);
+
+  // 深度识别开关（PSM 6 二次扫描，慢一倍但能补回漏掉的字）
+  const deepScan = $('#deepScan');
+  if (deepScan) {
+    deepScan.checked = state.deepScan;
+    deepScan.addEventListener('change', () => {
+      state.deepScan = deepScan.checked;
+    });
+  }
+
   for (const btn of document.querySelectorAll('#viewSeg .seg-btn')) {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
   }
@@ -1200,4 +1441,16 @@ async function init() {
 void init();
 
 // 调试/自动化钩子：tools/e2e.mts 用它注入截图、读取状态；正常使用不需要。
-window.__snap = { state, acceptImage, addWords, clearPicks, loadBook, tokenize, wkey, runOcr };
+window.__snap = {
+  state,
+  acceptImage,
+  addWords,
+  clearPicks,
+  loadBook,
+  tokenize,
+  wkey,
+  runOcr,
+  activateImage,
+  removeImage,
+  setLensEnabled,
+};
