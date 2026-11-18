@@ -245,6 +245,35 @@ async function main(): Promise<void> {
     check('选中计数已更新', (await evaluate(`document.querySelector('#pickedCount').textContent`)) === '1');
   }
 
+  console.log('\n4b) 新选中的单词排在最前面');
+  const secondRect = await evaluate(`(() => {
+    const el = [...document.querySelectorAll('#overlay .hit')].find(e => (e.title || '').toLowerCase() === 'deprivation');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  })()`);
+  check('找到第二个单词热区', Boolean(secondRect));
+  if (secondRect) {
+    await clickAt(secondRect.x, secondRect.y);
+    await waitFor(`document.querySelectorAll('#cards .card').length === 2`, '两张卡片');
+    const order = await evaluate(
+      `[...document.querySelectorAll('#cards .card .card-word')].map(el => el.textContent.toLowerCase())`,
+    );
+    check('新选中的词排在第一个', order[0] === 'deprivation' && order[1] === 'consolidation', JSON.stringify(order));
+    check('选中计数变成 2', (await evaluate(`document.querySelector('#pickedCount').textContent`)) === '2');
+
+    // 等两张卡片都查完（查询中的卡片还没有「移除」按钮），再移除，后面的用例继续用单卡片状态
+    await waitFor(`document.querySelectorAll('#cards .card .spinner').length === 0`, '两张卡片查完');
+    await evaluate(`(() => {
+      const card = [...document.querySelectorAll('#cards .card')].find(c => c.querySelector('.card-word')?.textContent === 'deprivation');
+      const remove = card && [...card.querySelectorAll('button')].find(b => b.textContent === '移除');
+      if (remove) remove.click();
+      return Boolean(remove);
+    })()`);
+    await waitFor(`document.querySelectorAll('#cards .card').length === 1`, '回到单卡片');
+    check('移除后回到一张卡片', (await evaluate(`document.querySelectorAll('#cards .card').length`)) === 1);
+  }
+
   console.log('\n5) 改词：点卡片上的单词改掉，重新出释义');
   const editOpened = await evaluate(`(() => {
     const card = [...document.querySelectorAll('#cards .card')].find(c => c.querySelector('.card-word')?.textContent === 'consolidation');
@@ -475,31 +504,33 @@ async function main(): Promise<void> {
   const backSrc = await evaluate(`document.querySelector('#shotImage').src.startsWith('data:image')`);
   check('切回后显示的是第一张图', Boolean(backSrc));
 
-  console.log('\n10c) 局部放大镜（只放大图片，不缩放页面）');
-  const lensPoint = await evaluate(`(() => {
-    const r = document.querySelector('#stage').getBoundingClientRect();
-    return { x: Math.round(r.left + r.width * 0.45), y: Math.round(r.top + r.height * 0.35) };
-  })()`);
+  console.log('\n10c) 缩放只发生在截图区内，页面不变大');
   const widthBefore = await evaluate(`document.documentElement.scrollWidth`);
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: lensPoint.x, y: lensPoint.y, button: 'none' }, sessionId);
-  await sleep(350);
-  const lensState = await evaluate(`(() => {
-    const lens = document.querySelector('#lens');
-    const style = getComputedStyle(lens);
-    return {
-      hidden: lens.hidden,
-      hasImage: style.backgroundImage.includes('data:image'),
-      position: style.backgroundPosition,
-      size: style.backgroundSize,
-    };
+  const stageBefore = await evaluate(`document.querySelector('#stage').getBoundingClientRect().width`);
+  await evaluate(`(() => {
+    const z = document.querySelector('#zoom');
+    z.value = '200';
+    z.dispatchEvent(new Event('input', { bubbles: true }));
+    return z.value;
   })()`);
-  check('鼠标停在图上出现放大镜', !lensState.hidden && lensState.hasImage, `${lensState.size} @ ${lensState.position}`);
+  await sleep(400);
   const widthAfter = await evaluate(`document.documentElement.scrollWidth`);
-  check('放大镜不会放大整个页面', widthAfter === widthBefore, `${widthBefore} → ${widthAfter}`);
-  await shot('e2e-lens.png');
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 4, y: 4, button: 'none' }, sessionId);
-  await sleep(300);
-  check('移出图片后放大镜消失', Boolean(await evaluate(`document.querySelector('#lens').hidden`)));
+  const stageAfter = await evaluate(`document.querySelector('#stage').getBoundingClientRect().width`);
+  check('缩放把图片放大到 200%', stageAfter > stageBefore * 1.5, `${Math.round(stageBefore)} → ${Math.round(stageAfter)}`);
+  check('页面本身没有被放大', widthAfter === widthBefore, `${widthBefore} → ${widthAfter}`);
+  check(
+    '放大后只在截图区里横向滚动',
+    Boolean(await evaluate(`(() => { const dz = document.querySelector('#dropzone'); return dz.scrollWidth > dz.clientWidth; })()`)),
+  );
+  await shot('e2e-zoom.png');
+  await evaluate(`(() => {
+    const z = document.querySelector('#zoom');
+    z.value = '100';
+    z.dispatchEvent(new Event('input', { bubbles: true }));
+    return true;
+  })()`);
+  await sleep(200);
+  check('缩回 100% 后图片恢复原宽', (await evaluate(`document.querySelector('#stage').getBoundingClientRect().width`)) <= stageBefore + 2);
 
   console.log('\n10d) 断词合并（conso lidation）');
   const splitPath = join(SHOT_DIR, 'test-split.png');

@@ -32,7 +32,6 @@
             <button class="seg-btn active" data-view="image" type="button">图片</button>
             <button class="seg-btn" data-view="text" type="button">文本</button>
           </div>
-          <button id="btnLens" class="btn tiny lens-btn" type="button" aria-pressed="true" title="鼠标停在图上时局部放大（不动页面）">🔍 放大镜</button>
           <label class="zoom">缩放
             <input id="zoom" type="range" min="100" max="260" step="10" value="100" />
           </label>
@@ -145,7 +144,6 @@
         <ol class="steps">
           <li>按 <span class="kbd">Win</span> + <span class="kbd">Shift</span> + <span class="kbd">S</span> 截图，或直接复制网页上的图片，回到本页按 <span class="kbd">Ctrl</span> + <span class="kbd">V</span>。</li>
           <li>识别完成后，在截图上**点单词**选区；点第二下取消。也可以在「文本」标签里拖选一整句。</li>
-          <li>鼠标停在图上会弹出局部放大镜（只放大图片，不缩放页面），小字也点得准。</li>
           <li>可以连续贴多张截图：每张图有自己的识别结果和选词，点下方缩略图切换，切回来还在。</li>
           <li>右侧卡片会给出音标、按词性分组的中文释义、考试标签和原形（如 screens → screen）。</li>
           <li>点「加入生词本」，攒够一批后点「导出到不背单词」，复制或下载 txt。</li>
@@ -155,7 +153,6 @@
       </div>
     </dialog>
 
-    <div id="lens" class="lens" hidden><span id="lensZoom" class="lens-zoom"></span></div>
     <div id="toast"></div>
     <script type="module" src="/app.js"></script>
   </body>

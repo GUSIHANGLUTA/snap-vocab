@@ -50,7 +50,6 @@ const state = {
   bookFilter: 'all',
   view: 'image',
   busy: false,
-  lensOn: true,
   deepScan: true,
 };
 
@@ -467,61 +466,6 @@ function applyZoom() {
   $('#stage').style.width = `${zoom}%`;
 }
 
-/* ------------------------------ 局部放大镜 ------------------------------ */
-
-const LENS_SIZE = 240;
-const LENS_SCALE = 2.6;
-
-/** 鼠标停在截图上时，用一块 fixed 定位的圆形浮层做局部放大：只放大图片，页面布局完全不动。 */
-function moveLens(event) {
-  const lens = $('#lens');
-  const stage = $('#stage');
-  if (!state.lensOn || state.view !== 'image' || !state.image.dataUrl || stage.hidden) {
-    lens.hidden = true;
-    return;
-  }
-  const rect = stage.getBoundingClientRect();
-  if (!rect.width || !rect.height) {
-    lens.hidden = true;
-    return;
-  }
-  const x = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-  const y = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
-
-  const bgWidth = rect.width * LENS_SCALE;
-  const bgHeight = rect.height * LENS_SCALE;
-  lens.style.backgroundImage = `url("${state.image.dataUrl}")`;
-  lens.style.backgroundSize = `${bgWidth}px ${bgHeight}px`;
-  lens.style.backgroundPosition = `${-(x * bgWidth - LENS_SIZE / 2)}px ${-(y * bgHeight - LENS_SIZE / 2)}px`;
-
-  // 靠近窗口边缘时翻到另一侧，别被裁掉
-  const offset = 20;
-  let left = event.clientX + offset;
-  if (left + LENS_SIZE > window.innerWidth - 8) left = event.clientX - LENS_SIZE - offset;
-  let top = event.clientY - LENS_SIZE / 2;
-  top = Math.max(8, Math.min(window.innerHeight - LENS_SIZE - 8, top));
-  lens.style.left = `${Math.max(8, left)}px`;
-  lens.style.top = `${top}px`;
-  lens.hidden = false;
-
-  const hint = $('#lensZoom');
-  if (hint) hint.textContent = `${LENS_SCALE}×`;
-}
-
-function hideLens() {
-  $('#lens').hidden = true;
-}
-
-function setLensEnabled(on) {
-  state.lensOn = Boolean(on);
-  const button = $('#btnLens');
-  if (button) {
-    button.classList.toggle('on', state.lensOn);
-    button.setAttribute('aria-pressed', String(state.lensOn));
-  }
-  if (!state.lensOn) hideLens();
-}
-
 function switchView(view) {
   state.view = view;
   for (const btn of document.querySelectorAll('#viewSeg .seg-btn')) {
@@ -532,27 +476,34 @@ function switchView(view) {
   $('#dzEmpty').hidden = hasImage;
   $('#dropzone').hidden = view === 'text';
   $('#textView').hidden = view !== 'text';
-  if (view !== 'image') hideLens();
 }
 
 /* ------------------------------ 选词 / 查词 ------------------------------ */
 
 function addWords(words, { silent = false } = {}) {
   const fresh = [];
+  const seen = new Set();
   for (const raw of words) {
     const word = clampWord(raw);
     const key = wkey(word);
-    if (!key || state.selected.has(key)) continue;
-    state.selected.set(key, { word, original: word, result: null });
-    fresh.push(word);
+    if (!key || seen.has(key) || state.selected.has(key)) continue;
+    seen.add(key);
+    fresh.push({ key, word });
   }
   if (!fresh.length) {
     if (!silent) toast('这些词已经在列表里了');
     return;
   }
+  // 新选中的词排到最前面（同一批里保持输入顺序），已有的词整体往后挪。
+  // Map 的插入顺序就是卡片的显示顺序，所以重建一次 Map 即可。
+  const next = new Map();
+  for (const item of fresh) next.set(item.key, { word: item.word, original: item.word, result: null });
+  for (const [key, value] of state.selected) next.set(key, value);
+  state.selected = next;
+
   renderCards();
   syncHighlights();
-  void ensureLookup(fresh);
+  void ensureLookup(fresh.map((item) => item.word));
 }
 
 async function ensureLookup(words) {
@@ -1375,17 +1326,6 @@ function bindEvents() {
   $('#btnClearShot').addEventListener('click', clearShot);
   $('#btnRetryInvert').addEventListener('click', () => void runOcr(!state.image.inverted));
 
-  // 局部放大镜：鼠标在图上来回移动只放大图片本身（fixed 浮层，不动页面布局）
-  const stage = $('#stage');
-  stage.addEventListener('pointermove', moveLens);
-  stage.addEventListener('pointerdown', moveLens);
-  stage.addEventListener('pointerleave', hideLens);
-  stage.addEventListener('pointercancel', hideLens);
-  $('#dropzone').addEventListener('scroll', hideLens, { passive: true });
-  window.addEventListener('scroll', hideLens, { passive: true });
-  $('#btnLens').addEventListener('click', () => setLensEnabled(!state.lensOn));
-  setLensEnabled(true);
-
   // 深度识别开关（PSM 6 二次扫描，慢一倍但能补回漏掉的字）
   const deepScan = $('#deepScan');
   if (deepScan) {
@@ -1452,5 +1392,4 @@ window.__snap = {
   runOcr,
   activateImage,
   removeImage,
-  setLensEnabled,
 };

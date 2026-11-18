@@ -272,31 +272,6 @@ ul { padding: 0; list-style: none; }
 .thumb:hover .thumb-del { opacity: 1; }
 .thumb-del:hover { background: var(--danger); }
 
-/* ---------- 局部放大镜（fixed 浮层，不影响页面布局） ---------- */
-.lens {
-  position: fixed;
-  width: 240px;
-  height: 240px;
-  border-radius: 50%;
-  border: 3px solid #fff;
-  box-shadow: 0 12px 34px rgba(15, 23, 42, 0.32), 0 0 0 1px rgba(15, 23, 42, 0.08);
-  background-color: #fff;
-  background-repeat: no-repeat;
-  pointer-events: none;
-  z-index: 70;
-}
-.lens-zoom {
-  position: absolute;
-  right: 10px;
-  bottom: 8px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: rgba(17, 24, 39, 0.65);
-  color: #fff;
-  font-size: 10px;
-  letter-spacing: 0.4px;
-}
-.lens-btn.on { background: var(--accent-soft); border-color: #bfd0f7; color: #1d4ed8; }
 .toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-3); cursor: pointer; }
 .toggle input { accent-color: var(--accent); }
 
