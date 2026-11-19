@@ -18,13 +18,16 @@
 param(
   [switch]$Apply,
   [switch]$Remove,
-  [string]$Name = '截图背单词'
+  [switch]$Ipad,
+  [string]$Name = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
 $appRoot = Split-Path -Parent $PSScriptRoot
-$launcher = Join-Path $appRoot '启动截图背单词.cmd'
+if (-not $Name) { $Name = if ($Ipad) { '截图背单词（iPad）' } else { '截图背单词' } }
+$launcherName = if ($Ipad) { '启动截图背单词-iPad.cmd' } else { '启动截图背单词.cmd' }
+$launcher = Join-Path $appRoot $launcherName
 $icon = Join-Path $appRoot 'assets\app.ico'
 $desktop = [Environment]::GetFolderPath('Desktop')
 $linkPath = Join-Path $desktop "$Name.lnk"
@@ -37,6 +40,7 @@ Write-Host "快捷方式 : $linkPath"
 Write-Host "启动脚本 : $launcher"
 Write-Host "图标     : $(if (Test-Path $icon) { $icon } else { '(没有 assets\app.ico，用默认图标)' })"
 Write-Host "工作目录 : $appRoot"
+if ($Ipad) { Write-Host '模式     : 局域网（允许 iPad / 手机访问）' -ForegroundColor Yellow }
 Write-Host ''
 
 if (-not (Test-Path $launcher)) {
