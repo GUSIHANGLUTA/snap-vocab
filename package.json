@@ -12,6 +12,7 @@
     "dict:build": "node scripts/build-dict.ts",
     "test": "node --test \"test/**/*.test.ts\"",
     "e2e": "node tools/e2e.mts",
+    "e2e:ipad": "node tools/e2e-ipad.mjs",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {

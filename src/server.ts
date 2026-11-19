@@ -1,5 +1,8 @@
 /**
- * 本机服务：静态页 + JSON API，只监听 127.0.0.1。
+ * 本机服务：静态页 + JSON API。
+ *
+ * 默认只监听 127.0.0.1；用「启动截图背单词-iPad.cmd」启动时会监听 0.0.0.0，
+ * 让同一 Wi-Fi 下的 iPad / 手机也能打开（没有登录态，只在可信局域网里这么用）。
  *
  * 启动时如果 data/dict.sqlite 不存在，会先自动构建词库（约 7~10s，只会发生一次），
  * 然后打开 OCR Worker。所有数据都留在本机，不联网（除非用户点「在线补全」）。
@@ -7,6 +10,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { APP_ROOT, DICT_FILE, buildDict } from './dict-build.ts';
 import { Dict, getDict } from './dict.ts';
@@ -17,10 +21,26 @@ import { getWordbook, type AddInput } from './wordbook.ts';
 import type { HealthInfo, LookupResult } from './types.ts';
 
 const VERSION = '1.0.0';
-const HOST = '127.0.0.1';
+const HOST = process.env.SNAP_HOST ?? '127.0.0.1';
 const PORT = Number.parseInt(process.env.PORT ?? '8910', 10);
 const PUBLIC_DIR = resolve(APP_ROOT, 'public');
 const MAX_BODY_BYTES = 24 * 1024 * 1024; // 截图 base64 后体积会膨胀 1/3
+
+/** 是否对外（局域网）开放：绑定 0.0.0.0 / :: 时算开放。 */
+const LAN_ENABLED = HOST === '0.0.0.0' || HOST === '::';
+
+/** 本机所有非回环 IPv4 地址，拼成 iPad 能打开的 URL。 */
+function lanUrls(): string[] {
+  const urls: string[] = [];
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family === 'IPv4' && !address.internal) {
+        urls.push(`http://${address.address}:${PORT}`);
+      }
+    }
+  }
+  return urls;
+}
 
 const STATIC_FILES = new Map<string, string>([
   ['/', 'index.html'],
@@ -161,6 +181,10 @@ async function handleApi(
       version: VERSION,
       bubeiUrl: BUBEI_URL,
       bubeiSteps: BUBEI_STEPS,
+      host: HOST,
+      port: PORT,
+      lanEnabled: LAN_ENABLED,
+      lanUrls: LAN_ENABLED ? lanUrls() : [],
       options: {
         ocrMaxImageBytes: 16 * 1024 * 1024,
         lookupMaxWords: 200,
@@ -368,8 +392,13 @@ export async function startServer(): Promise<{ url: string; port: number }> {
     server.once('error', reject);
     server.listen(PORT, HOST, resolvePromise);
   });
-  const url = `http://${HOST}:${PORT}`;
+  const url = `http://${LAN_ENABLED ? '127.0.0.1' : HOST}:${PORT}`;
   console.log(`截图背单词已启动：${url}`);
+  if (LAN_ENABLED) {
+    console.log('同一 Wi-Fi 下的 iPad / 手机可以打开：');
+    for (const lanUrl of lanUrls()) console.log(`  ${lanUrl}`);
+    if (!lanUrls().length) console.log('  （没检测到局域网 IP，检查是否连着 Wi-Fi）');
+  }
   console.log(`词库：${existsSync(DICT_FILE) ? '就绪' : '缺失'}，生词本：${getWordbook().count()} 词`);
   // 预热 OCR Worker 与打开浏览器都放到后台，不阻塞首次打开页面
   void warmupOcr().then(() => console.log('[ocr] 引擎就绪'));
@@ -395,7 +424,8 @@ const isEntrypoint = process.argv[1] && resolve(process.argv[1]) === resolve(imp
 
 if (isEntrypoint) {
   const { url } = await startServer();
-  console.log(`在浏览器打开：${url}`);
+  if (process.env.OPEN_BROWSER === '1') console.log(`在浏览器打开：${url}`);
+  else console.log(`浏览器打开：${url}${LAN_ENABLED ? '（局域网设备见上面的地址）' : ''}`);
   const shutdown = async () => {
     console.log('\n[server] 正在退出…');
     await shutdownOcr().catch(() => {});

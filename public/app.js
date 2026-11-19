@@ -51,6 +51,10 @@ const state = {
   view: 'image',
   busy: false,
   deepScan: true,
+  /** 平板/手机上的当前标签页：shot / words / book */
+  mobilePane: 'shot',
+  /** 当前是否是「窄屏（iPad/手机）标签式布局」 */
+  compact: false,
 };
 
 /* ------------------------------ 通用 ------------------------------ */
@@ -104,6 +108,77 @@ function blobToDataUrl(blob) {
 
 function clampWord(word) {
   return String(word).trim().replace(/\s+/g, ' ');
+}
+
+/* ------------------------------ 平板 / 手机布局 ------------------------------ */
+
+/** 屏幕窄于 1200px（iPad Air 竖屏 820、横屏 1180 都算）时，三栏换成「底部标签 + 单栏」。 */
+const COMPACT_QUERY = window.matchMedia('(max-width: 1200px)');
+const PANE_IDS = { shot: 'paneShot', words: 'paneWords', book: 'paneBook' };
+
+function updateTabCounts() {
+  const wordsBadge = $('#tabWordsCount');
+  if (wordsBadge) {
+    wordsBadge.textContent = String(state.selected.size);
+    wordsBadge.hidden = state.selected.size === 0;
+  }
+  const bookBadge = $('#tabBookCount');
+  if (bookBadge) {
+    bookBadge.textContent = String(state.book.length);
+    bookBadge.hidden = state.book.length === 0;
+  }
+  const peek = $('#peekBtn');
+  if (peek) {
+    const show = state.compact && state.mobilePane !== 'words' && state.selected.size > 0;
+    peek.hidden = !show;
+    const count = $('#peekCount');
+    if (count) count.textContent = String(state.selected.size);
+  }
+}
+
+/** 切到某个标签页（shot / words / book）。 */
+function setMobilePane(pane) {
+  const next = PANE_IDS[pane] ? pane : 'shot';
+  state.mobilePane = next;
+  for (const [name, id] of Object.entries(PANE_IDS)) {
+    const element = document.getElementById(id);
+    if (element) element.classList.toggle('mobile-active', state.compact && name === next);
+  }
+  for (const tab of document.querySelectorAll('#tabbar .tab')) {
+    tab.classList.toggle('active', tab.dataset.pane === next);
+    tab.setAttribute('aria-selected', String(tab.dataset.pane === next));
+  }
+  updateTabCounts();
+}
+
+/** 屏幕宽度变化时切换布局（iPad 横竖屏旋转会走这里）。 */
+function applyCompactLayout() {
+  state.compact = COMPACT_QUERY.matches;
+  const tabbar = $('#tabbar');
+  if (tabbar) tabbar.hidden = !state.compact;
+
+  // 触屏上没有 Ctrl+V，空状态的文案跟着换
+  const hint = $('#dzHint');
+  const hintSub = $('#dzHintSub');
+  const pick = $('#btnPick');
+  if (state.compact) {
+    if (hint) hint.innerHTML = '点下面的按钮，从「照片」里选一张截图';
+    if (hintSub) hintSub.textContent = 'iPad 上也可以从「照片」App 把图片拖进来；每张图各自记住自己的选词';
+    if (pick) pick.textContent = '从相册选择…';
+  } else {
+    if (hint) hint.innerHTML = '<b>Ctrl + V</b> 粘贴截图，或把图片拖到这里';
+    if (hintSub) hintSub.textContent = '可以连续贴多张：每张图各自记住自己的识别结果和选词，切换不丢';
+    if (pick) pick.textContent = '选择图片…';
+  }
+
+  if (state.compact) {
+    setMobilePane(state.mobilePane || 'shot');
+  } else {
+    for (const element of document.querySelectorAll('.layout > .pane')) element.classList.remove('mobile-active');
+    const peek = $('#peekBtn');
+    if (peek) peek.hidden = true;
+    updateTabCounts();
+  }
 }
 
 /* ------------------------------ 健康状态 ------------------------------ */
@@ -797,6 +872,7 @@ function syncHighlights() {
   if (badge) badge.textContent = String(state.selected.size);
   const thumb = document.querySelectorAll('#thumbs .thumb')[activeIndex];
   if (thumb) thumb.title = `第 ${activeIndex + 1} 张 · ${state.selected.size} 个词`;
+  updateTabCounts();
 }
 
 /* ------------------------------ 卡片 ------------------------------ */
@@ -984,12 +1060,14 @@ function renderCards() {
       '还没有选中单词。<br />在截图上点单词，或者切到「文本」拖选。<br /><span class="hint">加进来之后还能点卡片上的单词改词，改完自动重新查释义。</span>';
     container.append(empty);
     $('#pickedCount').textContent = '0';
+    updateTabCounts();
     return;
   }
   const fragment = document.createDocumentFragment();
   for (const key of state.selected.keys()) fragment.append(buildCard(key));
   container.append(fragment);
   $('#pickedCount').textContent = String(state.selected.size);
+  updateTabCounts();
 }
 
 function speakWord(word) {
@@ -1042,6 +1120,7 @@ function renderBook() {
     return true;
   });
   $('#bookCount').textContent = String(state.book.length);
+  updateTabCounts();
   if (!filtered.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
@@ -1224,6 +1303,17 @@ function bindEvents() {
     event.target.value = '';
   });
 
+  // 平板/手机：底部标签页 + 悬浮「查看选词」
+  for (const tab of document.querySelectorAll('#tabbar .tab')) {
+    tab.addEventListener('click', () => setMobilePane(tab.dataset.pane));
+  }
+  $('#peekBtn').addEventListener('click', () => setMobilePane('words'));
+  if (typeof COMPACT_QUERY.addEventListener === 'function') {
+    COMPACT_QUERY.addEventListener('change', applyCompactLayout);
+  } else if (typeof COMPACT_QUERY.addListener === 'function') {
+    COMPACT_QUERY.addListener(applyCompactLayout); // 老版 Safari
+  }
+
   // 粘贴：优先图片，其次文本
   document.addEventListener('paste', (event) => {
     const target = event.target;
@@ -1359,6 +1449,7 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
+  applyCompactLayout();
   await refreshHealth();
   try {
     state.config = await api('/api/config');
@@ -1371,11 +1462,33 @@ async function init() {
     if (state.config.bubeiUrl) {
       $('#btnOpenBubei').href = state.config.bubeiUrl;
     }
+    renderLanBox();
   } catch {
     /* 配置拿不到不影响主流程 */
   }
   await loadBook();
   renderCards();
+}
+
+/** 帮助弹窗里的「同一 Wi-Fi 用 iPad 打开」提示。 */
+function renderLanBox() {
+  const box = $('#lanBox');
+  if (!box || !state.config) return;
+  box.hidden = false;
+  box.textContent = '';
+  const urls = state.config.lanUrls ?? [];
+  if (state.config.lanEnabled && urls.length) {
+    box.append('同一 Wi-Fi 下，iPad 在 Safari 打开：');
+    urls.forEach((url, index) => {
+      if (index > 0) box.append(' 或 ');
+      const code = document.createElement('code');
+      code.textContent = url;
+      box.append(code);
+    });
+    box.append(document.createElement('br'), 'iPad 上点「选择图片」即可从相册选截图。');
+    return;
+  }
+  box.append('想在 iPad 上用：电脑上双击「启动截图背单词-iPad.cmd」，然后用同一 Wi-Fi 的 iPad Safari 打开窗口里显示的地址。');
 }
 
 void init();
@@ -1392,4 +1505,6 @@ window.__snap = {
   runOcr,
   activateImage,
   removeImage,
+  setMobilePane,
+  applyCompactLayout,
 };

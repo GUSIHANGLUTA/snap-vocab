@@ -40,8 +40,8 @@
         <div class="dropzone" id="dropzone">
           <div class="dz-empty" id="dzEmpty">
             <div class="dz-icon">📋</div>
-            <p><b>Ctrl + V</b> 粘贴截图，或把图片拖到这里</p>
-            <p class="hint">可以连续贴多张：每张图各自记住自己的识别结果和选词，切换不丢</p>
+            <p id="dzHint"><b>Ctrl + V</b> 粘贴截图，或把图片拖到这里</p>
+            <p class="hint" id="dzHintSub">可以连续贴多张：每张图各自记住自己的识别结果和选词，切换不丢</p>
             <button id="btnPick" class="btn primary" type="button">选择图片…</button>
           </div>
           <div class="stage" id="stage" hidden>
@@ -106,6 +106,22 @@
       </section>
     </main>
 
+    <!-- 平板/手机：底部三个标签 + 悬浮「查看选词」 -->
+    <nav class="tabbar" id="tabbar" hidden>
+      <button class="tab active" data-pane="shot" type="button">
+        <span class="tab-ico">🖼</span><span>截图</span>
+      </button>
+      <button class="tab" data-pane="words" type="button">
+        <span class="tab-ico">📝</span><span>选词</span>
+        <span class="tab-count" id="tabWordsCount" hidden>0</span>
+      </button>
+      <button class="tab" data-pane="book" type="button">
+        <span class="tab-ico">📚</span><span>生词本</span>
+        <span class="tab-count" id="tabBookCount" hidden>0</span>
+      </button>
+    </nav>
+    <button id="peekBtn" class="peek" type="button" hidden>查看选词 <span id="peekCount">0</span> →</button>
+
     <input id="fileInput" type="file" accept="image/*" hidden />
 
     <!-- 导出弹窗 -->
@@ -142,13 +158,15 @@
       </form>
       <div class="dialog-body">
         <ol class="steps">
-          <li>按 <span class="kbd">Win</span> + <span class="kbd">Shift</span> + <span class="kbd">S</span> 截图，或直接复制网页上的图片，回到本页按 <span class="kbd">Ctrl</span> + <span class="kbd">V</span>。</li>
+          <li>电脑上：按 <span class="kbd">Win</span> + <span class="kbd">Shift</span> + <span class="kbd">S</span> 截图，或直接复制网页上的图片，回到本页按 <span class="kbd">Ctrl</span> + <span class="kbd">V</span>。</li>
+          <li>iPad 上：用「启动截图背单词-iPad.cmd」在电脑上启动（同一 Wi-Fi），iPad Safari 打开下面显示的地址，点「选择图片」从相册选截图。</li>
           <li>识别完成后，在截图上**点单词**选区；点第二下取消。也可以在「文本」标签里拖选一整句。</li>
           <li>可以连续贴多张截图：每张图有自己的识别结果和选词，点下方缩略图切换，切回来还在。</li>
-          <li>右侧卡片会给出音标、按词性分组的中文释义、考试标签和原形（如 screens → screen）。</li>
+          <li>卡片会给出音标、按词性分组的中文释义、考试标签和原形（如 screens → screen）。</li>
           <li>点「加入生词本」，攒够一批后点「导出到不背单词」，复制或下载 txt。</li>
           <li>浏览器打开 bbdc.cn 登录 → 左上角「自制词书」上传 txt → 手机 App 里「词书 / 换本词书 → 自制」就能背了。</li>
         </ol>
+        <div id="lanBox" class="lan-box" hidden></div>
         <p class="note">全部识别与查词都在本机完成（OCR 用本地 tesseract，词库是本地 ECDICT 77 万词），不联网也能用。</p>
       </div>
     </dialog>

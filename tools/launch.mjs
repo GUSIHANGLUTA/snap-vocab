@@ -1,5 +1,5 @@
 /**
- * 双击启动器（被「启动截图背单词.cmd」调用）。
+ * 双击启动器（被「启动截图背单词.cmd」和「启动截图背单词-iPad.cmd」调用）。
  *
  * 为什么中文放在这里而不是 .cmd 里：cmd.exe 按系统代码页读取批处理文件，
  * UTF-8 的中文会被截成乱码甚至当成命令执行。.cmd 保持纯 ASCII，这里先 chcp 65001
@@ -9,16 +9,43 @@
  *  - 检测到服务已经在跑 → 直接把浏览器打开到那个地址，然后正常退出（不再报端口占用）；
  *  - 端口被别的程序占着 → 给一句人话提示，建议换 PORT；
  *  - 都没有 → 启动服务，等它真的能访问了再打开浏览器。
+ *
+ * 加 `--lan`（iPad/手机版）时监听 0.0.0.0，并把局域网地址打印出来，方便在 iPad 上打开。
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import net from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const isWindows = process.platform === 'win32';
 const port = Number.parseInt(process.env.PORT ?? '8910', 10);
 const url = `http://127.0.0.1:${port}`;
+const lanMode = process.argv.includes('--lan');
+
+/** 局域网里 iPad 能打开的地址（绑定 0.0.0.0 时才有意义）。 */
+function lanUrls() {
+  const urls = [];
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family === 'IPv4' && !address.internal) urls.push(`http://${address.address}:${port}`);
+    }
+  }
+  return urls;
+}
+
+function printLanHint() {
+  if (!lanMode) return;
+  const urls = lanUrls();
+  if (!urls.length) {
+    console.log('（没检测到局域网 IP：确认电脑连着 Wi-Fi，再检查防火墙是否放行）');
+    return;
+  }
+  console.log('\n同一 Wi-Fi 下，iPad / 手机在 Safari 里打开下面这个地址：');
+  for (const item of urls) console.log(`  ${item}`);
+  console.log('（用完关掉这个窗口就断开对外访问）\n');
+}
 
 // 控制台切到 UTF-8，中文才不会显示成乱码
 if (isWindows) spawnSync('cmd', ['/c', 'chcp 65001'], { stdio: 'ignore' });
@@ -69,6 +96,7 @@ function isPortTaken() {
 // ---- 1. 已经在跑：直接开浏览器 ----
 if (await isOurServiceRunning()) {
   console.log(`截图背单词已经在运行：${url}`);
+  printLanHint();
   if (openBrowser(url)) {
     console.log('已为你打开页面；如果浏览器没反应，手动访问上面这个地址即可。');
     process.exit(0);
@@ -108,12 +136,13 @@ if (!existsSync(resolve(root, 'data', 'dict.sqlite'))) {
 }
 
 // ---- 4. 启动服务 ----
+if (lanMode) console.log('（iPad / 手机模式：服务会监听局域网，同一 Wi-Fi 的设备都能打开）');
 console.log(`正在启动截图背单词（${url}）…关闭本窗口或按 Ctrl+C 即可停止。`);
 const child = spawn(process.execPath, [resolve(root, 'src', 'server.ts')], {
   cwd: root,
   stdio: 'inherit',
   // 浏览器由这里在「确认端口通了」之后再开，避免服务还没起来就打开空白页
-  env: { ...process.env, OPEN_BROWSER: '0' },
+  env: { ...process.env, OPEN_BROWSER: '0', ...(lanMode ? { SNAP_HOST: '0.0.0.0' } : {}) },
 });
 
 let exited = false;
@@ -130,6 +159,7 @@ child.on('exit', (code) => {
 for (let attempt = 0; attempt < 120 && !exited; attempt += 1) {
   if (await isOurServiceRunning()) {
     console.log(`服务已就绪：${url}`);
+    printLanHint();
     if (!openBrowser(url)) console.log('浏览器没能自动打开，请手动访问上面这个地址。');
     break;
   }
