@@ -91,6 +91,8 @@ ul { padding: 0; list-style: none; }
 .btn.tiny { padding: 5px 9px; font-size: 12px; border-radius: 8px; }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn.danger { color: var(--danger); border-color: #f3d1d1; }
+/* 开关型按钮（自动发音等）打开时的样子 */
+.btn.on { background: var(--accent-soft); border-color: #bfd0f7; color: #1d4ed8; }
 
 /* ---------- 三栏布局 ---------- */
 .layout {

@@ -186,6 +186,29 @@ async function main(): Promise<void> {
   };
 
   await cdp.send('Page.enable', {}, sessionId);
+  // 把浏览器语音合成换成假实现，记录「读了哪些词」，这样自动发音可以被断言
+  await cdp.send(
+    'Page.addScriptToEvaluateOnNewDocument',
+    {
+      source: `(() => {
+        const spoken = [];
+        window.__spokenWords = spoken;
+        function FakeUtterance(text) { this.text = text; }
+        Object.defineProperty(window, 'SpeechSynthesisUtterance', { value: FakeUtterance, configurable: true });
+        Object.defineProperty(window, 'speechSynthesis', {
+          configurable: true,
+          value: {
+            speak(u) { if (u && u.text) spoken.push(String(u.text)); },
+            cancel() {},
+            getVoices() { return [{ name: 'Google US English', lang: 'en-US' }]; },
+            addEventListener() {},
+            removeEventListener() {},
+          },
+        });
+      })();`,
+    },
+    sessionId,
+  );
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1500, height: 1050, deviceScaleFactor: 1, mobile: false }, sessionId);
   await cdp.send('Page.navigate', { url: `${APP}/` }, sessionId);
   await sleep(1200);
@@ -243,9 +266,15 @@ async function main(): Promise<void> {
     check('卡片含词性中文', String(cardText).includes('名词'), String(cardText).split('\n').slice(0, 4).join(' / '));
     check('卡片含中文释义', String(cardText).includes('巩固'), '');
     check('选中计数已更新', (await evaluate(`document.querySelector('#pickedCount').textContent`)) === '1');
+    const spoken = await evaluate(`window.__spokenWords ?? []`);
+    check('选中单词自动发音', Array.isArray(spoken) && spoken.includes('consolidation'), JSON.stringify(spoken));
+    check(
+      '自动发音按钮默认是开的',
+      (await evaluate(`document.querySelector('#btnAutoSpeak').getAttribute('aria-pressed')`)) === 'true',
+    );
   }
 
-  console.log('\n4b) 新选中的单词排在最前面');
+  console.log('\n4b) 新选中的单词排在最前面 + 自动发音开关');
   const secondRect = await evaluate(`(() => {
     const el = [...document.querySelectorAll('#overlay .hit')].find(e => (e.title || '').toLowerCase() === 'deprivation');
     if (!el) return null;
@@ -254,6 +283,15 @@ async function main(): Promise<void> {
   })()`);
   check('找到第二个单词热区', Boolean(secondRect));
   if (secondRect) {
+    // 先关掉自动发音：再选一个词，不应该有新的朗读
+    await evaluate(`document.querySelector('#btnAutoSpeak').click()`);
+    check('可关闭自动发音（aria 与开关状态）', await evaluate(`(() => {
+      const btn = document.querySelector('#btnAutoSpeak');
+      return btn.getAttribute('aria-pressed') === 'false' && !btn.classList.contains('on');
+    })()`));
+    check('关闭状态记在 localStorage', (await evaluate(`localStorage.getItem('snap-vocab:auto-speak')`)) === '0');
+    const spokenBefore = await evaluate(`(window.__spokenWords ?? []).length`);
+
     await clickAt(secondRect.x, secondRect.y);
     await waitFor(`document.querySelectorAll('#cards .card').length === 2`, '两张卡片');
     const order = await evaluate(
@@ -261,6 +299,8 @@ async function main(): Promise<void> {
     );
     check('新选中的词排在第一个', order[0] === 'deprivation' && order[1] === 'consolidation', JSON.stringify(order));
     check('选中计数变成 2', (await evaluate(`document.querySelector('#pickedCount').textContent`)) === '2');
+    const spokenAfter = await evaluate(`(window.__spokenWords ?? []).length`);
+    check('关掉后选词不再朗读', spokenAfter === spokenBefore, `${spokenBefore} → ${spokenAfter}`);
 
     // 等两张卡片都查完（查询中的卡片还没有「移除」按钮），再移除，后面的用例继续用单卡片状态
     await waitFor(`document.querySelectorAll('#cards .card .spinner').length === 0`, '两张卡片查完');
@@ -272,6 +312,10 @@ async function main(): Promise<void> {
     })()`);
     await waitFor(`document.querySelectorAll('#cards .card').length === 1`, '回到单卡片');
     check('移除后回到一张卡片', (await evaluate(`document.querySelectorAll('#cards .card').length`)) === 1);
+
+    // 重新打开，后面的改词用例沿用默认行为
+    await evaluate(`document.querySelector('#btnAutoSpeak').click()`);
+    check('可以重新打开自动发音', (await evaluate(`document.querySelector('#btnAutoSpeak').getAttribute('aria-pressed')`)) === 'true');
   }
 
   console.log('\n5) 改词：点卡片上的单词改掉，重新出释义');

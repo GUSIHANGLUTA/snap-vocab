@@ -55,7 +55,11 @@ const state = {
   mobilePane: 'shot',
   /** 当前是否是「窄屏（iPad/手机）标签式布局」 */
   compact: false,
+  /** 选中单词时自动朗读（默认开，可关掉，记在 localStorage） */
+  autoSpeak: true,
 };
+
+const AUTO_SPEAK_KEY = 'snap-vocab:auto-speak';
 
 /* ------------------------------ 通用 ------------------------------ */
 
@@ -579,6 +583,9 @@ function addWords(words, { silent = false } = {}) {
   renderCards();
   syncHighlights();
   void ensureLookup(fresh.map((item) => item.word));
+
+  // 选中就朗读：一次点一个词时读这个词；一次拖选/粘贴一批时读这批的第一个，避免连珠炮
+  if (state.autoSpeak) speakWord(fresh[0].word, { silent: true });
 }
 
 async function ensureLookup(words) {
@@ -683,6 +690,7 @@ async function renamePick(oldKey, rawWord, options = {}) {
       state.results.delete(oldKey);
       renderCards();
       await ensureLookup([word]);
+      if (state.autoSpeak) speakWord(word, { silent: true });
     } else {
       renderCards();
     }
@@ -728,6 +736,8 @@ async function renamePick(oldKey, rawWord, options = {}) {
   renderOverlay(); // 截图上的高亮随 key 变化自然消失
   syncHighlights();
   await ensureLookup([word]);
+  // 改完词也读一遍，确认改对了（自动纠错后的正确读音尤其有用）
+  if (state.autoSpeak) speakWord(word, { silent: true });
   if (correction) {
     toast(`已自动纠正拼写：${correction.from} → ${correction.to}`, 'ok');
   }
@@ -1070,16 +1080,59 @@ function renderCards() {
   updateTabCounts();
 }
 
-function speakWord(word) {
-  if (!('speechSynthesis' in window)) {
-    toast('这个浏览器不支持朗读', 'error');
+/** 挑一个英语音色（Chrome/Edge 上常见的是 Google US English / Microsoft 英文音色，iPad 是 Samantha）。 */
+function pickEnglishVoice() {
+  if (!('speechSynthesis' in window)) return null;
+  let voices = [];
+  try {
+    voices = window.speechSynthesis.getVoices?.() ?? [];
+  } catch {
+    voices = [];
+  }
+  if (!voices.length) return null;
+  const preferred = ['Google US English', 'Samantha', 'Microsoft Aria', 'Microsoft Zira', 'Alex'];
+  for (const name of preferred) {
+    const hit = voices.find((voice) => String(voice.name).includes(name));
+    if (hit) return hit;
+  }
+  return voices.find((voice) => /^en([-_]|$)/i.test(String(voice.lang))) ?? null;
+}
+
+/** 朗读一个单词。silent=true 时（自动发音）不弹错误提示，避免连点刷屏。 */
+function speakWord(word, { silent = false } = {}) {
+  if (!word) return;
+  if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance !== 'function') {
+    if (!silent) toast('这个浏览器不支持朗读', 'error');
     return;
   }
-  const utterance = new SpeechSynthesisUtterance(word);
-  utterance.lang = 'en-US';
-  utterance.rate = 0.92;
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(utterance);
+  try {
+    const utterance = new SpeechSynthesisUtterance(word);
+    utterance.lang = 'en-US';
+    utterance.rate = 0.92;
+    const voice = pickEnglishVoice();
+    if (voice) utterance.voice = voice;
+    // 先取消上一句：连点时始终读最新的那个词
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    if (!silent) toast('朗读失败：这个浏览器可能禁用了语音', 'error');
+  }
+}
+
+/** 自动发音开关（记在 localStorage，刷新后保持）。 */
+function setAutoSpeak(on) {
+  state.autoSpeak = Boolean(on);
+  try {
+    localStorage.setItem(AUTO_SPEAK_KEY, state.autoSpeak ? '1' : '0');
+  } catch {
+    /* 隐私模式下 localStorage 可能不可写，忽略 */
+  }
+  const button = $('#btnAutoSpeak');
+  if (button) {
+    button.classList.toggle('on', state.autoSpeak);
+    button.setAttribute('aria-pressed', String(state.autoSpeak));
+    button.title = state.autoSpeak ? '选中单词时自动朗读（点击关闭）' : '自动朗读已关闭（点击打开）';
+  }
 }
 
 async function lookupOnline(key, button) {
@@ -1413,6 +1466,7 @@ function bindEvents() {
 
   $('#btnClearPicks').addEventListener('click', clearPicks);
   $('#btnAddAll').addEventListener('click', () => void addAllToBook());
+  $('#btnAutoSpeak').addEventListener('click', () => setAutoSpeak(!state.autoSpeak));
   $('#btnClearShot').addEventListener('click', clearShot);
   $('#btnRetryInvert').addEventListener('click', () => void runOcr(!state.image.inverted));
 
@@ -1450,6 +1504,12 @@ function bindEvents() {
 async function init() {
   bindEvents();
   applyCompactLayout();
+  // 自动发音：默认开，上次关掉的保持关
+  try {
+    setAutoSpeak(localStorage.getItem(AUTO_SPEAK_KEY) !== '0');
+  } catch {
+    setAutoSpeak(true);
+  }
   await refreshHealth();
   try {
     state.config = await api('/api/config');
@@ -1507,4 +1567,6 @@ window.__snap = {
   removeImage,
   setMobilePane,
   applyCompactLayout,
+  setAutoSpeak,
+  speakWord,
 };

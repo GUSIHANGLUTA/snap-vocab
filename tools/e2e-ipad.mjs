@@ -169,6 +169,29 @@ async function main() {
   };
 
   await cdp.send('Page.enable', {}, sessionId);
+  // 假语音合成：记录 iPad 上「选中即发音」读了哪些词
+  await cdp.send(
+    'Page.addScriptToEvaluateOnNewDocument',
+    {
+      source: `(() => {
+        const spoken = [];
+        window.__spokenWords = spoken;
+        function FakeUtterance(text) { this.text = text; }
+        Object.defineProperty(window, 'SpeechSynthesisUtterance', { value: FakeUtterance, configurable: true });
+        Object.defineProperty(window, 'speechSynthesis', {
+          configurable: true,
+          value: {
+            speak(u) { if (u && u.text) spoken.push(String(u.text)); },
+            cancel() {},
+            getVoices() { return [{ name: 'Samantha', lang: 'en-US' }]; },
+            addEventListener() {},
+            removeEventListener() {},
+          },
+        });
+      })();`,
+    },
+    sessionId,
+  );
   await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }, sessionId);
   await setViewport(820, 1180);
   await cdp.send('Page.navigate', { url: `${BASE}/` }, sessionId);
@@ -222,6 +245,8 @@ async function main() {
       return !badge.hidden && badge.textContent === '1';
     })()`));
     check('出现悬浮「查看选词」', await evaluate(`!document.querySelector('#peekBtn').hidden`));
+    const spoken = await evaluate(`window.__spokenWords ?? []`);
+    check('iPad 上选中即发音', Array.isArray(spoken) && spoken.includes('consolidation'), JSON.stringify(spoken));
   }
 
   console.log('\n3) 标签切换');
@@ -233,6 +258,13 @@ async function main() {
   const wordsVisible = await evaluate(`document.querySelector('#paneWords').offsetParent !== null && document.querySelector('#paneShot').offsetParent === null`);
   check('点悬浮按钮切到「选词」', Boolean(wordsVisible));
   check('选词页能看到卡片', await evaluate(`document.querySelectorAll('#cards .card').length === 1`));
+  check(
+    '选词页有「自动发音」开关',
+    await evaluate(`(() => {
+      const btn = document.querySelector('#btnAutoSpeak');
+      return Boolean(btn) && btn.offsetParent !== null && btn.getAttribute('aria-pressed') === 'true';
+    })()`),
+  );
   await shot('e2e-ipad-words.png');
 
   await evaluate(`document.querySelector('#tabbar .tab[data-pane="book"]').click()`);
