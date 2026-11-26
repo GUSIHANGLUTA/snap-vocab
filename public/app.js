@@ -55,6 +55,8 @@ const state = {
   mobilePane: 'shot',
   /** 当前是否是「窄屏（iPad/手机）标签式布局」 */
   compact: false,
+  /** iPad 离线词库下载状态 */
+  offlineDict: { supported: false, ready: false, busy: false, completed: 0, total: 0 },
   /** 选中单词时自动朗读（默认开，可关掉，记在 localStorage） */
   autoSpeak: true,
 };
@@ -117,11 +119,17 @@ function clampWord(word) {
 /* ------------------------------ 平板 / 手机布局 ------------------------------ */
 
 /**
- * 屏幕窄于 1200px，或当前主设备是触摸屏时，三栏换成「底部标签 + 单栏」。
- * 后者覆盖 13 英寸 iPad 横屏、台前调度和部分外接显示器场景。
+ * 屏幕窄于 1200px，或当前主设备是触摸屏时，使用「同屏学习」布局：
+ * 截图和选中单词同时显示；生词本仍通过底部标签切换。
  */
 const COMPACT_QUERY = window.matchMedia('(max-width: 1200px), (any-pointer: coarse)');
-const PANE_IDS = { shot: 'paneShot', words: 'paneWords', book: 'paneBook' };
+const STUDY_PANES = ['paneShot', 'paneWords'];
+const PANE_GROUPS = { study: STUDY_PANES, book: ['paneBook'] };
+
+function normalizeMobilePane(pane) {
+  // 兼容旧代码里的 shot / words：两者都归到同屏学习。
+  return pane === 'book' ? 'book' : 'study';
+}
 
 function updateTabCounts() {
   const wordsBadge = $('#tabWordsCount');
@@ -134,26 +142,27 @@ function updateTabCounts() {
     bookBadge.textContent = String(state.book.length);
     bookBadge.hidden = state.book.length === 0;
   }
+  // 同屏学习时截图和选词都可见，不再需要悬浮入口。
   const peek = $('#peekBtn');
-  if (peek) {
-    const show = state.compact && state.mobilePane !== 'words' && state.selected.size > 0;
-    peek.hidden = !show;
-    const count = $('#peekCount');
-    if (count) count.textContent = String(state.selected.size);
-  }
+  if (peek) peek.hidden = true;
 }
 
-/** 切到某个标签页（shot / words / book）。 */
+/** 切到「同屏学习」或「生词本」。 */
 function setMobilePane(pane) {
-  const next = PANE_IDS[pane] ? pane : 'shot';
+  const next = normalizeMobilePane(pane);
   state.mobilePane = next;
-  for (const [name, id] of Object.entries(PANE_IDS)) {
-    const element = document.getElementById(id);
-    if (element) element.classList.toggle('mobile-active', state.compact && name === next);
+  for (const [name, ids] of Object.entries(PANE_GROUPS)) {
+    for (const id of ids) {
+      const element = document.getElementById(id);
+      if (element) element.classList.toggle('mobile-active', state.compact && name === next);
+    }
   }
   for (const tab of document.querySelectorAll('#tabbar .tab')) {
-    tab.classList.toggle('active', tab.dataset.pane === next);
-    tab.setAttribute('aria-selected', String(tab.dataset.pane === next));
+    const tabPane = normalizeMobilePane(tab.dataset.pane);
+    const active = tabPane === next;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+    tab.hidden = tab.dataset.pane === 'words';
   }
   updateTabCounts();
 }
@@ -170,7 +179,7 @@ function applyCompactLayout() {
   const pick = $('#btnPick');
   if (state.compact) {
     if (hint) hint.innerHTML = '点下面的按钮，从「照片」里选一张截图';
-    if (hintSub) hintSub.textContent = 'iPad 上也可以从「照片」App 把图片拖进来；每张图各自记住自己的选词';
+    if (hintSub) hintSub.textContent = '截图和选词同屏显示；每张图各自记住自己的选词';
     if (pick) pick.textContent = '从相册选择…';
   } else {
     if (hint) hint.innerHTML = '<b>Ctrl + V</b> 粘贴截图，或把图片拖到这里';
@@ -179,7 +188,7 @@ function applyCompactLayout() {
   }
 
   if (state.compact) {
-    setMobilePane(state.mobilePane || 'shot');
+    setMobilePane(state.mobilePane || 'study');
   } else {
     for (const element of document.querySelectorAll('.layout > .pane')) element.classList.remove('mobile-active');
     const peek = $('#peekBtn');
@@ -213,6 +222,104 @@ async function refreshHealth() {
     pill.textContent = '连不上本机服务';
     pill.title = String(error?.message || error);
   }
+}
+
+/* ------------------------------ 离线词库 ------------------------------ */
+
+function setOfflineDictionaryButton(text, { ready = false } = {}) {
+  const button = $('#btnOfflineDict');
+  if (!button) return;
+  button.textContent = text;
+  button.classList.toggle('on', ready);
+}
+
+async function refreshOfflineDictionaryState() {
+  const button = $('#btnOfflineDict');
+  const cache = window.__snapIpadBridge?.dictionaryCache;
+  if (!button || !cache) {
+    if (button) button.hidden = true;
+    return null;
+  }
+  try {
+    const status = await cache.inspect();
+    state.offlineDict.supported = status.supported !== false;
+    state.offlineDict.ready = Boolean(status.ready);
+    state.offlineDict.completed = status.cached ?? 0;
+    state.offlineDict.total = status.total ?? 0;
+    if (!state.offlineDict.supported) {
+      button.hidden = true;
+      return status;
+    }
+    button.disabled = false;
+    setOfflineDictionaryButton(
+      status.ready ? '词库已离线' : '下载离线词库',
+      { ready: status.ready },
+    );
+    button.title = status.ready
+      ? `完整词库已缓存（${status.cached}/${status.total} 个文件），断网也能查词`
+      : `缓存完整词库（已缓存 ${status.cached}/${status.total} 个文件），之后断网也能查词`;
+    return status;
+  } catch (error) {
+    console.warn('[离线词库] 状态检查失败', error);
+    setOfflineDictionaryButton('下载离线词库');
+    button.title = '下载后断网也能查词';
+    return null;
+  }
+}
+
+async function setupOfflineDictionary() {
+  const button = $('#btnOfflineDict');
+  const cache = window.__snapIpadBridge?.dictionaryCache;
+  if (!button || !cache) {
+    if (button) button.hidden = true;
+    return;
+  }
+  state.offlineDict.supported = true;
+  await refreshOfflineDictionaryState();
+  button.addEventListener('click', async () => {
+    if (state.offlineDict.busy || state.offlineDict.ready) return;
+    state.offlineDict.busy = true;
+    button.disabled = true;
+    button.classList.remove('on');
+    setOfflineDictionaryButton('准备下载…');
+    try {
+      await cache.download((progress) => {
+        state.offlineDict.completed = progress.completed;
+        state.offlineDict.total = progress.total;
+        const percent = progress.total
+          ? Math.round((progress.completed / progress.total) * 100)
+          : 0;
+        setOfflineDictionaryButton(`下载 ${percent}%`);
+        button.title = `正在缓存离线词库（${progress.completed}/${progress.total}）`;
+      });
+      state.offlineDict.ready = true;
+      setOfflineDictionaryButton('词库已离线', { ready: true });
+      button.title = '完整词库已缓存，断网也能查词';
+      toast('离线词库下载完成，之后断网也能查词', 'ok');
+    } catch (error) {
+      toast(`离线词库下载失败：${error.message}`, 'error');
+      setOfflineDictionaryButton('重试下载');
+      button.title = String(error.message || error);
+    } finally {
+      state.offlineDict.busy = false;
+      button.disabled = false;
+    }
+  });
+  if (!state.offlineDict.ready) {
+    // 只预热常用还原表，不偷偷下载几十 MB 的完整词库。
+    setTimeout(() => {
+      if (!state.offlineDict.busy) {
+        void window.__snapIpadBridge?.warmDictionary?.().catch(() => {});
+      }
+    }, 1800);
+  }
+}
+
+/** OCR 出来后预先加载对应字母分片，点词时就不用再等首包。 */
+function warmDictionaryForText(text) {
+  const bridge = window.__snapIpadBridge;
+  if (!bridge?.prefetchText || !text) return;
+  void bridge.prefetchText(text).catch(() => {});
 }
 
 /* ------------------------------ 截图 / OCR ------------------------------ */
@@ -457,6 +564,7 @@ async function runOcr(forceInvert) {
     state.image.inverted = inverted;
     record.ocr = result;
     record.inverted = inverted;
+    warmDictionaryForText(result.text);
 
     const wordCount = result.lines.reduce((sum, line) => sum + line.words.length, 0);
     const notes = [];
@@ -1359,11 +1467,11 @@ function bindEvents() {
     event.target.value = '';
   });
 
-  // 平板/手机：底部标签页 + 悬浮「查看选词」
+  // 平板/手机：底部标签页；截图和选词在同屏学习页同时显示
   for (const tab of document.querySelectorAll('#tabbar .tab')) {
     tab.addEventListener('click', () => setMobilePane(tab.dataset.pane));
   }
-  $('#peekBtn').addEventListener('click', () => setMobilePane('words'));
+  $('#peekBtn').addEventListener('click', () => setMobilePane('study'));
   if (typeof COMPACT_QUERY.addEventListener === 'function') {
     COMPACT_QUERY.addEventListener('change', applyCompactLayout);
   } else if (typeof COMPACT_QUERY.addListener === 'function') {
@@ -1507,6 +1615,7 @@ function bindEvents() {
 async function init() {
   bindEvents();
   applyCompactLayout();
+  void setupOfflineDictionary();
   // 自动发音：默认开，上次关掉的保持关
   try {
     setAutoSpeak(localStorage.getItem(AUTO_SPEAK_KEY) !== '0');
@@ -1572,4 +1681,5 @@ window.__snap = {
   applyCompactLayout,
   setAutoSpeak,
   speakWord,
+  setupOfflineDictionary,
 };

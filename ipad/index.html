@@ -26,6 +26,7 @@
       <div class="topbar-actions">
         <span id="statusPill" class="pill">正在连接本机服务…</span>
         <button id="btnPickTop" class="btn">选择图片</button>
+        <button id="btnOfflineDict" class="btn ghost" type="button" title="下载后断网也能查词">下载离线词库</button>
         <button id="btnHelp" class="btn ghost">怎么用</button>
       </div>
     </header>
@@ -116,12 +117,13 @@
 
     <!-- 平板/手机：底部三个标签 + 悬浮「查看选词」 -->
     <nav class="tabbar" id="tabbar" hidden>
-      <button class="tab active" data-pane="shot" type="button">
-        <span class="tab-ico">🖼</span><span>截图</span>
-      </button>
-      <button class="tab" data-pane="words" type="button">
-        <span class="tab-ico">📝</span><span>选词</span>
+      <button class="tab active" data-pane="study" type="button">
+        <span class="tab-ico">🖼</span><span>同屏学习</span>
         <span class="tab-count" id="tabWordsCount" hidden>0</span>
+      </button>
+      <button class="tab" data-pane="words" type="button" hidden>
+        <span class="tab-ico">📝</span><span>选词</span>
+        <span class="tab-count" id="tabWordsCountLegacy" hidden>0</span>
       </button>
       <button class="tab" data-pane="book" type="button">
         <span class="tab-ico">📚</span><span>生词本</span>

@@ -12,6 +12,14 @@
   const nativeFetch = window.fetch.bind(window);
   const jsonCache = new Map();
   const dataUrlSizeCache = new Map();
+  const DICT_CACHE = 'snap-vocab-ipad-v3';
+  const DICT_CORE_ASSETS = [
+    'data/catalog.json',
+    'data/forms.json.gz',
+    'data/lemmas.json.gz',
+    'data/words.json.gz',
+    'data/common.json.gz',
+  ];
   const WORD_KEY = 'snap-vocab:ipad:wordbook:v1';
   const INSTALL_TIP_KEY = 'snap-vocab:ipad:install-tip-dismissed:v1';
   const BUBEI_URL = 'https://bbdc.cn/lexis_book_index';
@@ -329,6 +337,7 @@
 
   class LocalDictionary {
     constructor() {
+      this.catalog = null;
       this.catalogPromise = null;
       this.bucketPromises = new Map();
       this.bucketMaps = new Map();
@@ -364,6 +373,31 @@
           });
       }
       return this.catalogPromise;
+    }
+
+    /** 预先加载截图中出现的字母分片，避免第一次点词等待大文件。 */
+    async prefetchWords(words) {
+      const buckets = new Set();
+      for (const word of words ?? []) {
+        const key = normalizeKey(word);
+        if (key) buckets.add(bucketOf(key));
+      }
+      await Promise.all(
+        [...buckets].map((bucket) => this.bucket(bucket).catch(() => null)),
+      );
+      // 顺手预热屈折还原表，但这部分不阻塞分片加载。
+      void Promise.allSettled([this.loadForms(), this.loadLemmas()]);
+    }
+
+    async prefetchText(text) {
+      const words = String(text ?? '').match(/[A-Za-z][A-Za-z'.-]*/g) ?? [];
+      await this.prefetchWords(words);
+    }
+
+    /** 页面空闲时只预取常用索引，不下载完整 30MB 词库。 */
+    async warmCore() {
+      await this.ensure();
+      await Promise.all([this.loadForms(), this.loadLemmas()]);
     }
 
     async bucket(bucket) {
@@ -563,14 +597,15 @@
 
     async lookupMany(inputs) {
       const seen = new Set();
-      const out = [];
+      const pending = [];
       for (const input of inputs.slice(0, 200)) {
         const key = normalizeKey(input);
         if (!key || seen.has(key)) continue;
         seen.add(key);
-        out.push(await this.lookup(input));
+        pending.push(this.lookup(input));
       }
-      return out;
+      // 同一批词并行查；共享的字母分片会复用同一个加载 Promise。
+      return Promise.all(pending);
     }
   }
 
@@ -730,6 +765,90 @@
 
   const dict = new LocalDictionary();
   const wordbook = new LocalWordbook();
+
+  function dictionaryAssetUrls(catalog) {
+    const buckets =
+      Array.isArray(catalog?.buckets) && catalog.buckets.length
+        ? catalog.buckets
+        : [...'abcdefghijklmnopqrstuvwxyz_'];
+    const files = [
+      ...DICT_CORE_ASSETS,
+      ...buckets.map((bucket) => `data/dict-${bucket}.json.gz`),
+    ];
+    return [...new Set(files)].map((file) => new URL(file, BASE).href);
+  }
+
+  async function inspectDictionaryCache() {
+    if (!('caches' in window)) {
+      return { supported: false, ready: false, total: 0, cached: 0 };
+    }
+    const catalog = await dict.ensure();
+    const urls = dictionaryAssetUrls(catalog);
+    const cache = await caches.open(DICT_CACHE);
+    let cached = 0;
+    const missing = [];
+    for (const url of urls) {
+      if (await cache.match(url)) cached += 1;
+      else missing.push(url);
+    }
+    const estimate = navigator.storage?.estimate
+      ? await navigator.storage.estimate().catch(() => null)
+      : null;
+    return {
+      supported: true,
+      ready: cached === urls.length,
+      total: urls.length,
+      cached,
+      missing,
+      usage: estimate?.usage ?? null,
+      quota: estimate?.quota ?? null,
+    };
+  }
+
+  async function downloadDictionaryCache(onProgress) {
+    if (!('caches' in window)) {
+      throw new Error('当前浏览器不支持离线缓存，请升级 Safari');
+    }
+    const catalog = await dict.ensure();
+    const urls = dictionaryAssetUrls(catalog);
+    const cache = await caches.open(DICT_CACHE);
+    let completed = 0;
+    for (const url of urls) {
+      if (!(await cache.match(url))) {
+        let response;
+        try {
+          response = await nativeFetch(url, { cache: 'reload' });
+        } catch (error) {
+          throw new Error(`下载失败：${url.split('/').pop()}（${error.message}）`);
+        }
+        if (!response.ok) {
+          throw new Error(`下载失败：${url.split('/').pop()}（HTTP ${response.status}）`);
+        }
+        try {
+          await cache.put(url, response.clone());
+        } catch {
+          throw new Error('离线缓存写入失败，可能是浏览器存储空间不足');
+        }
+      }
+      completed += 1;
+      onProgress?.({
+        completed,
+        total: urls.length,
+        current: url.split('/').pop(),
+      });
+    }
+    const estimate = navigator.storage?.estimate
+      ? await navigator.storage.estimate().catch(() => null)
+      : null;
+    return {
+      supported: true,
+      ready: true,
+      total: urls.length,
+      cached: completed,
+      usage: estimate?.usage ?? null,
+      quota: estimate?.quota ?? null,
+    };
+  }
 
   function toBox(bbox) {
     return {
@@ -1379,13 +1498,15 @@
       box.dataset.ipadReady = '1';
       box.hidden = false;
       box.textContent =
-        '这是独立 iPad 版：首次打开需要联网加载 OCR 与词库，用过的资源会缓存；生词本保存在当前 iPad 浏览器里。';
+        '这是独立 iPad 版：首次打开需要联网；点右上角「下载离线词库」可缓存完整词库，之后断网也能查词。生词本保存在当前 iPad 浏览器里。';
     }
   }
 
   function setupUi() {
     injectIpadStyles();
     setTimeout(showInstallTip, 900);
+    // 空闲时预热屈折还原表；不预取完整词库，避免首次打开偷偷下载几十 MB。
+    setTimeout(() => void dict.warmCore().catch(() => {}), 2200);
     rewriteIpadHelp();
     const observer = new MutationObserver(() => rewriteIpadHelp());
     observer.observe(document.body, { childList: true, subtree: true });
@@ -1410,6 +1531,19 @@
   window.__snapIpadBridge = {
     dict,
     wordbook,
+    dictionaryCache: {
+      inspect: inspectDictionaryCache,
+      download: downloadDictionaryCache,
+    },
+    prefetchText(text) {
+      return dict.prefetchText(text);
+    },
+    prefetchWords(words) {
+      return dict.prefetchWords(words);
+    },
+    warmDictionary() {
+      return dict.warmCore();
+    },
     recognizeImage,
     buildExport,
     parseTranslation,

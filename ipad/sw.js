@@ -4,7 +4,7 @@
  * 首次打开先联网加载应用和 OCR；已经看过的词库分片、OCR 模型和其页面资源
  * 会被缓存。之后再次打开，即使暂时没网也能继续使用已缓存内容。
  */
-const CACHE = 'snap-vocab-ipad-v2';
+const CACHE = 'snap-vocab-ipad-v3';
 const SHELL = [
   './',
   './index.html',
