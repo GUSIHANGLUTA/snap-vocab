@@ -1,0 +1,20 @@
+{
+  "name": "截图背单词 · iPad 版",
+  "short_name": "截图背单词",
+  "description": "在 iPad Safari 中直接识别英文截图、点选单词并整理生词本。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f6f9",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "./icon-256.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

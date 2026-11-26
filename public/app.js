@@ -116,8 +116,11 @@ function clampWord(word) {
 
 /* ------------------------------ 平板 / 手机布局 ------------------------------ */
 
-/** 屏幕窄于 1200px（iPad Air 竖屏 820、横屏 1180 都算）时，三栏换成「底部标签 + 单栏」。 */
-const COMPACT_QUERY = window.matchMedia('(max-width: 1200px)');
+/**
+ * 屏幕窄于 1200px，或当前主设备是触摸屏时，三栏换成「底部标签 + 单栏」。
+ * 后者覆盖 13 英寸 iPad 横屏、台前调度和部分外接显示器场景。
+ */
+const COMPACT_QUERY = window.matchMedia('(max-width: 1200px), (any-pointer: coarse)');
 const PANE_IDS = { shot: 'paneShot', words: 'paneWords', book: 'paneBook' };
 
 function updateTabCounts() {

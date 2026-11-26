@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node src/server.ts",
     "dict:build": "node scripts/build-dict.ts",
+    "ipad:build": "node scripts/build-ipad-pwa.mjs",
     "test": "node --test \"test/**/*.test.ts\"",
     "e2e": "node tools/e2e.mts",
     "e2e:ipad": "node tools/e2e-ipad.mjs",

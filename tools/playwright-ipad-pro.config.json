@@ -1,0 +1,13 @@
+{
+  "browser": {
+    "contextOptions": {
+      "viewport": {
+        "width": 1366,
+        "height": 1024
+      },
+      "deviceScaleFactor": 1,
+      "hasTouch": true,
+      "isMobile": true
+    }
+  }
+}
